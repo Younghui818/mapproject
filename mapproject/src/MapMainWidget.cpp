@@ -24,7 +24,10 @@ void MapMainWidget::InitUI() {
 
   // 创建地图视图容器
   QWidget* mapViewContainer = new QWidget(this);
+  QVBoxLayout* containerLayout = new QVBoxLayout(mapViewContainer);
+  containerLayout->setContentsMargins(0, 0, 0, 0);  // 去掉边距
   map_view_ = new MapView(mapViewContainer);
+  containerLayout->addWidget(map_view_);
 
   mainLayout->addWidget(image_switcher);
   mainLayout->addWidget(mapViewContainer);

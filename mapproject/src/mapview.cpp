@@ -17,8 +17,8 @@ MapView::MapView(QWidget* parent)
   setRenderHint(QPainter::SmoothPixmapTransform);
   setBackgroundBrush(QBrush(QColor(191, 191, 191)));
   setScene(m_scene);
-  setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-  setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
   QNetworkProxyFactory::setUseSystemConfiguration(true);
 
@@ -32,16 +32,22 @@ MapView::MapView(QWidget* parent)
   connect(verticalScrollBar(), &QScrollBar::valueChanged, this,
           [this] { m_scrollTimer.start(150); });
 
-  setSceneRectForZoom(m_zoom);
+  int z = m_zoom;
+  QPoint hz = latLonToTile(30.2741, 120.1551, z);
+  QPointF centerScene((hz.x() + 0.5) * 256.0, (hz.y() + 0.5) * 256.0);
 
-  QPoint hz = latLonToTile(30.2741, 120.1551, m_zoom);
-  centerOn((hz.x() + 0.5) * 256.0, (hz.y() + 0.5) * 256.0);
+  setSceneRectForZoom(z);  // 整世界场景矩形
+  centerOn(centerScene);
   loadVisibleTiles();
+  qDebug() << "[Init map view center] center:x" << centerScene.x()
+           << " y:" << centerScene.y();
 }
 
 void MapView::wheelEvent(QWheelEvent* event) {
   // 记住当前场景中心（zoom 改变后需要换算）
   QPointF oldCenter = mapToScene(viewport()->rect().center());
+  qDebug() << "[Scale map view old center] center:x" << oldCenter.x()
+           << " y:" << oldCenter.y();
   int oldZoom = m_zoom;
 
   if (event->angleDelta().y() > 0 && m_zoom < 18)
@@ -62,7 +68,8 @@ void MapView::wheelEvent(QWheelEvent* event) {
   double factor = std::pow(2.0, m_zoom - oldZoom);
   QPointF newCenter(oldCenter.x() * factor, oldCenter.y() * factor);
   centerOn(newCenter);
-
+  qDebug() << "[Scale map view new center] center:x" << newCenter.x()
+           << " y:" << newCenter.y();
   loadVisibleTiles();
   m_scrollTimer.stop();
 }
@@ -81,8 +88,8 @@ void MapView::mouseMoveEvent(QMouseEvent* event) {
     QPoint delta = event->pos() - m_lastMousePos;
     m_lastMousePos = event->pos();
     // ★ 无 transform，视口像素 = 场景单位，直接累加
-    horizontalScrollBar()->setValue(horizontalScrollBar()->value() + delta.x());
-    verticalScrollBar()->setValue(verticalScrollBar()->value() + delta.y());
+    horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
+    verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
   }
   QGraphicsView::mouseMoveEvent(event);
 }
@@ -139,6 +146,10 @@ void MapView::onTileLoaded(QNetworkReply* reply) {
 
 void MapView::loadVisibleTiles() {
   QRectF visibleRect = mapToScene(viewport()->rect()).boundingRect();
+
+  qDebug() << "[Get map view rect] x:" << visibleRect.x()
+           << " y:" << visibleRect.y() << " width:" << visibleRect.width()
+           << " height:" << visibleRect.height();
 
   const double tileSize = 256.0;  // 瓦片永远 256 场景单位
 
@@ -207,6 +218,6 @@ void MapView::SwitchTileServer(ImageType type) {
   }
   m_scene->clear();
   m_loadedTiles.clear();
-  ++m_epoch;             
+  ++m_epoch;
   loadVisibleTiles();
 }
