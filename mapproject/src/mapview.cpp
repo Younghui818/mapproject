@@ -58,8 +58,8 @@ void MapView::wheelEvent(QWheelEvent* event) {
     return;
   }
 
+  for (auto& s : m_loadedTiles) s.clear();
   m_scene->clear();
-  m_loadedTiles.clear();
   ++m_epoch;
   // 场景 rect 随 zoom 改变
   setSceneRectForZoom(m_zoom);
@@ -104,6 +104,7 @@ void MapView::mouseReleaseEvent(QMouseEvent* event) {
 
 void MapView::onTileLoaded(QNetworkReply* reply) {
   auto key = reply->request().attribute(QNetworkRequest::User).toPoint();
+  int layerId = reply->request().attribute(LayerAttr).toInt();
   quint64 ep = reply->request().attribute(epochAttr()).toULongLong();
   if (ep != m_epoch) {
     reply->deleteLater();
@@ -116,7 +117,7 @@ void MapView::onTileLoaded(QNetworkReply* reply) {
   QByteArray data = reply->readAll();
 
   if (reply->error() != QNetworkReply::NoError) {
-    m_loadedTiles.remove(key);
+    m_loadedTiles[layerId].remove(key);
     reply->deleteLater();
     return;
   }
@@ -128,7 +129,7 @@ void MapView::onTileLoaded(QNetworkReply* reply) {
   if (!r.canRead()) {
     qDebug() << "[tile] reader cannot read, err=" << r.errorString()
              << "formats=" << QImageReader::supportedImageFormats();
-    m_loadedTiles.remove(key);
+    m_loadedTiles[layerId].remove(key);
     reply->deleteLater();
     return;
   }
@@ -136,10 +137,19 @@ void MapView::onTileLoaded(QNetworkReply* reply) {
   if (r.read(&img) && !img.isNull()) {
     auto* item = new QGraphicsPixmapItem(QPixmap::fromImage(img));
     item->setPos(key.x() * 256.0, key.y() * 256.0);
+    // 找该layer的opacity/z
+    double op = 1.0;
+    int z = 0;
+    for (auto& l : m_layers)
+      if (l.id == TileLayerId(layerId)) {
+        op = l.opacity;
+        z = l.zBase;
+      }
+    item->setOpacity(op);
+    item->setZValue(z);
     m_scene->addItem(item);
   } else {
-    qDebug() << "[tile] reader read failed, err=" << r.errorString();
-    m_loadedTiles.remove(key);
+    m_loadedTiles[layerId].remove(key);
   }
   reply->deleteLater();
 }
@@ -153,34 +163,40 @@ void MapView::loadVisibleTiles() {
 
   const double tileSize = 256.0;  // 瓦片永远 256 场景单位
 
-  int tileLeft = static_cast<int>(std::floor(visibleRect.left() / tileSize));
-  int tileRight = static_cast<int>(std::floor(visibleRect.right() / tileSize));
-  int tileTop = static_cast<int>(std::floor(visibleRect.top() / tileSize));
-  int tileBottom =
-      static_cast<int>(std::floor(visibleRect.bottom() / tileSize));
+  int left = static_cast<int>(std::floor(visibleRect.left() / tileSize));
+  int right = static_cast<int>(std::floor(visibleRect.right() / tileSize));
+  int top = static_cast<int>(std::floor(visibleRect.top() / tileSize));
+  int bottom = static_cast<int>(std::floor(visibleRect.bottom() / tileSize));
+  int maxT = (1 << m_zoom) - 1;
 
-  qDebug() << "[tiles] zoom=" << m_zoom << " range:" << tileLeft << tileRight
-           << tileTop << tileBottom;
+  for (const auto& ly : m_layers) {
+    if (!ly.enabled) continue;
+    for (int x = left; x <= right; ++x) {
+      for (int y = top; y <= bottom; ++y) {
+        if (x < 0 || x > maxT || y < 0 || y > maxT) continue;
+        QPoint key(x, y);
+        if (m_loadedTiles[ly.id].contains(key)) continue;
+        int sub = (x + y) % 4 + 1;
+        QString url;
+        if (ly.urlTemplate.contains("tianditu")) {
+          // 天地图WMTS示例：col=x,row=y,matrix=zoom
+          url = ly.urlTemplate.arg(sub).arg(x).arg(y).arg(
+              m_zoom);  // 按你模板占位调整
+        } else {
+          url = ly.urlTemplate.arg(sub).arg(x).arg(y).arg(m_zoom);
+        }
 
-  for (int x = tileLeft; x <= tileRight; ++x) {
-    for (int y = tileTop; y <= tileBottom; ++y) {
-      int maxTile = (1 << m_zoom) - 1;
-      if (x < 0 || x > maxTile || y < 0 || y > maxTile) continue;
-
-      QPoint key(x, y);
-      if (m_loadedTiles.contains(key)) continue;
-      int sub = (x + y) % 4 + 1;
-      QString url = QString(url_).arg(sub).arg(x).arg(y).arg(m_zoom);
-
-      QNetworkRequest req(url);
-      req.setHeader(QNetworkRequest::UserAgentHeader,
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MapStudio/1.0");
-      req.setRawHeader("Referer", "https://www.amap.com/");
-      req.setAttribute(QNetworkRequest::User, QVariant::fromValue(key));
-      req.setAttribute(epochAttr(), QVariant::fromValue<quint64>(m_epoch));
-      m_nam->get(req);
-
-      m_loadedTiles.insert(key);
+        QNetworkRequest req(url);
+        req.setHeader(QNetworkRequest::UserAgentHeader,
+                      "Mozilla/5.0 MapStudio/1.0");
+        req.setRawHeader("Referer", "https://www.amap.com/");
+        req.setAttribute(QNetworkRequest::User, QVariant::fromValue(key));
+        req.setAttribute(epochAttr(), QVariant::fromValue(m_epoch));
+        req.setAttribute(LayerAttr,
+                         int(ly.id));  // 自定义attr存layer
+        m_nam->get(req);
+        m_loadedTiles[ly.id].insert(key);
+      }
     }
   }
 }
@@ -202,22 +218,40 @@ void MapView::setSceneRectForZoom(int zoom) {
 }
 
 void MapView::SwitchTileServer(ImageType type) {
-  switch (type) {
-    case kImageTypeRoads:
-      url_ =
-          "https://webrd0%1.is.autonavi.com/"
-          "appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=%2&y=%3&z=%4";
-      break;
-    case kImageTypeSt:
-      url_ =
-          "https://webst0%1.is.autonavi.com/"
-          "appmaptile?lang=zh_cn&size=1&scale=1&style=6&x=%2&y=%3&z=%4";
-      break;
-    default:
-      break;
+  m_layers.clear();
+  if (type == kImageTypeSt) {
+    // 卫星层
+    m_layers.append({LayerSat,
+                     "https://t%1.tianditu.gov.cn/img_w/wmts?"
+                     "SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=img&"
+                     "STYLE=default&FORMAT=tiles&TILEMATRIXSET=w&"
+                     "TILEMATRIX=%4&TILEROW=%3&TILECOL=%2&tk="
+                     "4e17baf1ebcefc505f3121c67950cd71",
+                     1.0, 0, true});
+    // m_layers.append(
+    //     {LayerSat,
+    //      "https://webst0%1.is.autonavi.com/"
+    //      "appmaptile?lang=zh_cn&size=1&scale=1&style=6&x=%2&y=%3&z=%4",
+    //      1.0, 0, true});
+    //  注记层：高德若有无底色style可放这；没有就用天地图注记/自绘
+    m_layers.append({LayerAnno,
+                     "https://t%1.tianditu.gov.cn/cva_w/"
+                     "wmts?service=WMTS&request=GetTile&version=1.0.0&layer="
+                     "cva&style=default&format=image/"
+                     "png&tilematrixset=w&tilematrix=%4&tilerow=%3&tilecol=%2&"
+                     "tk=4e17baf1ebcefc505f3121c67950cd71",
+                     1.0, 1, true});
+    // 天地图WMTS参数顺序和你xyz模板不同，下面load要单独处理；若用XYZ简化版见备注
+  } else {
+    // 路线底图
+    m_layers.append(
+        {LayerSat,
+         "https://webrd0%1.is.autonavi.com/"
+         "appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=%2&y=%3&z=%4",
+         1.0, 0, true});
   }
+  for (auto& s : m_loadedTiles) s.clear();
   m_scene->clear();
-  m_loadedTiles.clear();
   ++m_epoch;
   loadVisibleTiles();
 }
