@@ -507,3 +507,23 @@ void MapView::ClearAllPaths() {
   current_path_markers_.clear();
   current_path_points_.clear();
 }
+
+// 在文件适当位置添加 SceneToLatLon 实现
+bool MapView::SceneToLatLon(const QPointF& scenePt, double& outLat,
+                            double& outLon) const {
+  // 计算 tile x/y（浮点）
+  double tx = scenePt.x() / 256.0;
+  double ty = scenePt.y() / 256.0;
+  int z = zoom_;
+  double n = static_cast<double>(1 << z);
+  double lon = tx / n * 360.0 - 180.0;
+
+  // 反 WebMercator Y -> lat
+  double y = ty / n;
+  double lat_rad = atan(sinh(M_PI * (1.0 - 2.0 * y)));
+  double lat = lat_rad * 180.0 / M_PI;
+
+  outLat = lat;
+  outLon = lon;
+  return true;
+}

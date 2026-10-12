@@ -7,17 +7,22 @@
 MapMainWidget::MapMainWidget(QWidget* parent) : QWidget(parent) { InitUI(); }
 
 void MapMainWidget::InitUI() {
-  setWindowTitle("MapStudio - OSM Map Demo");
-  resize(1024, 768);
+  setWindowTitle("MapStudio - Map Demo");
 
   QHBoxLayout* main_layout = new QHBoxLayout(this);
 
+  // 正常地图显示
   QWidget* map_view_container = new QWidget(this);
   QHBoxLayout* container_layout = new QHBoxLayout(map_view_container);
   container_layout->setContentsMargins(1, 1, 1, 1);
   map_view_ = new MapView(map_view_container);
   container_layout->addWidget(map_view_);
   main_layout->addWidget(map_view_container);
+
+  // 3d地图显示
+  w3d_widget_ = new Map3DWidget(this);
+  container_layout->addWidget(w3d_widget_);
+  w3d_widget_->hide();
 
   QWidget* widget_operation = new QWidget(this);
   widget_operation->setFixedWidth(240);
@@ -58,6 +63,10 @@ void MapMainWidget::InitUI() {
   cbx_show_cva_->setText("show cva");
   widget_map_show_layout->addWidget(cbx_show_cva_);
   cbx_show_cva_->setChecked(true);
+
+  operation_layout->addSpacing(10);
+  btn_enter_3d_ = new QPushButton("enter 3d", widget_operation);
+  operation_layout->addWidget(btn_enter_3d_);
 
   operation_layout->addSpacing(10);
   cbx_mouse_add_point_ = new QCheckBox(widget_operation);
@@ -110,6 +119,9 @@ void MapMainWidget::SignalsLink() {
           &MapMainWidget::SlotOnPathSaved);
   connect(map_view_, &MapView::PathRemoved, this,
           &MapMainWidget::SlotOnPathRemoved);
+
+  connect(btn_enter_3d_, &QPushButton::clicked, this,
+          &MapMainWidget::SlotOnEnter3DClicked);
 }
 
 void MapMainWidget::SlotUpdateMapSourceImage() {
@@ -174,4 +186,34 @@ void MapMainWidget::SlotOnPathRemoved(quint64 id) {
   // 可选：若需要根据 id 找到并移除侧边 UI 行可在此实现（当前 lambda 已直接删除
   // UI 行）
   Q_UNUSED(id);
+}
+
+void MapMainWidget::SlotOnEnter3DClicked() {
+  if (!map_view_) return;
+
+  // 获取当前地图中心经纬
+  QPointF centerScene =
+      map_view_->mapToScene(map_view_->viewport()->rect().center());
+  double lat = 0, lon = 0;
+  if (!map_view_->SceneToLatLon(centerScene, lat, lon)) {
+    // 无法转换
+    return;
+  }
+
+  // 隐藏2D视图并创建 3D 窗口（简单替换）
+  map_view_->hide();
+  w3d_widget_->show();
+
+  // 100km 半径
+  double radiusMeters = 1000.0;
+  connect(w3d_widget_, &Map3DWidget::SignalReady, this, [this]() {
+    // 3D ready，后续 UI 切换逻辑...
+    qDebug() << "3D ready";
+  });
+  connect(w3d_widget_, &Map3DWidget::Failed, this,
+          [this](const QString& reason) {
+            qWarning() << "3D build failed:" << reason;
+          });
+
+  w3d_widget_->Build3DFromCenter(lat, lon, radiusMeters);
 }

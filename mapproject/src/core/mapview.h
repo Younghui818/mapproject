@@ -43,7 +43,9 @@ class MapView : public QGraphicsView {
  public:
   explicit MapView(QWidget* parent = nullptr);
   void SwitchTileServer(MapSources sources, ImageType type, bool show_cva);
-
+  // 将 scene 坐标转换为经纬度（WGS84）
+  bool SceneToLatLon(const QPointF& scenePt, double& outLat,
+                     double& outLon) const;
   // 路径绘制接口
  public slots:
   void SetAddingPath(bool enable);

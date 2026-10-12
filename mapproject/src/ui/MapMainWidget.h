@@ -4,10 +4,11 @@
 #include <QCheckBox>
 #include <QPushButton>
 #include <QRadioButton>
-#include <QWidget>
 #include <QVBoxLayout>
+#include <QWidget>
 
 #include "mapview.h"
+#include "Map3DWidget.h"
 
 class MapMainWidget : public QWidget {
   Q_OBJECT
@@ -24,10 +25,14 @@ class MapMainWidget : public QWidget {
   void SlotEndPath();
   void SlotOnPathSaved(quint64 id, const QString& name);
   void SlotOnPathRemoved(quint64 id);
+  void SlotOnEnter3DClicked();
 
  private:
   void InitUI();
   void SignalsLink();
+
+  Map3DWidget* w3d_widget_ = nullptr;
+  MapView* map_view_ = nullptr;
 
   QRadioButton* btn_rd_ = nullptr;
   QRadioButton* btn_st_ = nullptr;
@@ -36,6 +41,9 @@ class MapMainWidget : public QWidget {
   QRadioButton* btn_tianditu_ = nullptr;
 
   QCheckBox* cbx_show_cva_ = nullptr;
+
+  QPushButton* btn_enter_3d_ = nullptr;
+
   QCheckBox* cbx_mouse_add_point_ = nullptr;
   QPushButton* btn_clear_all_path_ = nullptr;
 
@@ -43,8 +51,6 @@ class MapMainWidget : public QWidget {
   QPushButton* btn_end_path_ = nullptr;
   QWidget* paths_list_widget_ = nullptr;
   QVBoxLayout* paths_list_layout_ = nullptr;
-
-  MapView* map_view_ = nullptr;
 };
 
 #endif  // MAP_MAIN_WIDGET_H_

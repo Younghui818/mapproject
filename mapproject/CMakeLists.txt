@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.23)
-project(MapProject LANGUAGES CXX)
+project(MapProject LANGUAGES CXX) 
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 17) 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ================= 1. 基础工程规范 =================
