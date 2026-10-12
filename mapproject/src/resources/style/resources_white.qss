@@ -1,0 +1,46 @@
+*{outline:none;}
+
+QToolTip {
+    color: rgba(255, 255, 255, 1);
+    background-color: rgba(68, 68, 68, 1);
+    border: 1px solid rgba(102, 102, 102, 1);
+    padding: 1px 2px;
+    border-radius: 2px;
+    font-size: 18px;
+    white-space: pre-wrap;
+    max-width: 336px; 
+	color:white;
+}
+ 
+QWidget{
+	background-color:rgb(220,220,220);
+	color:black;
+}
+ToolItem {
+	opacity: 1.0;
+	color:white;
+	background-color:#383838;
+	font-size:20px;
+	border-radius: 2px;
+	border: none;
+	}
+ToolItem:hover:!disabled{
+	background-color:rgba(255, 255, 255, 0.1);
+	}	
+ToolItem:disabled:!checked{ 
+	opacity: 0;
+	color:rgb(116, 116, 116);
+}								  
+ToolItem:checked:disabled{
+	border: 1px solid rgba(71, 169, 255, 1);
+	background: rgba(53, 116, 240, 0.4);
+	color:rgb(255,255,255)!important;
+}
+
+QWidget#map_sourcer_switcher,
+QWidget#image_switcher{
+	border: 1px solid rgba(71, 169, 255, 1);
+}
+QWidget#widget_map_show{
+	border: 1px solid rgba(71, 169, 255, 1);
+}

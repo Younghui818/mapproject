@@ -54,7 +54,6 @@ include(${CMAKE_SOURCE_DIR}/cmake/conan.cmake)
   list(APPEND CONAN_IMPORTS
     "bin, *.db -> ${CONAN_DLL_DIR}"
     "Configuration, *.* -> ${CONAN_DLL_DIR}/Configuration"
-    "bin, crashpad_handler.exe -> ${CONAN_DLL_DIR}"
     "bin, *.dll -> ${CONAN_DLL_DIR}"
     "bin, *.pdb -> ${CONAN_DLL_DIR}"
     "bin/pdb, *.pdb -> ${CONAN_DLL_DIR}"
@@ -62,10 +61,9 @@ include(${CMAKE_SOURCE_DIR}/cmake/conan.cmake)
     "plugins, *.* -> ${CONAN_DLL_DIR}/plugins"
     "resources, *.* -> ${CONAN_DLL_DIR}/resources"
     "bin/rtsp_server, *.* -> ${CONAN_DLL_DIR}/rtsp_server"
-    "bin/MeasCadConverter, * -> ${CONAN_DLL_DIR}/MeasCadConverter"
   )
 
-# 仅保留 Demo 必需的核心依赖
+# 仅保留必需的核心依赖
 conan_cmake_configure(
   REQUIRES
     qt/6.8.3
