@@ -99,7 +99,7 @@ void MapMainWidget::SignalsLink() {
 
 void MapMainWidget::SlotUpdateMapSourceImage() {
   map_view_->SwitchTileServer(
-      btn_god_->isChecked() ? kMapSourcesAMap : kMapSourcesTiamDiTu,
+      btn_god_->isChecked() ? kMapSourcesAMap : kMapSourcesTianDiTu,
       btn_rd_->isChecked() ? kImageTypeRoads : kImageTypeSt,
       cbx_show_cva_->isChecked());
   update();

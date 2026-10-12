@@ -32,12 +32,7 @@ endif()
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR})
 list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
 
-# 如果 branding.cmake 不存在则使用默认值
-if(EXISTS ${CMAKE_SOURCE_DIR}/cmake/branding.cmake)
-  include(${CMAKE_SOURCE_DIR}/cmake/branding.cmake)
-else()
-  set(PRODUCT_NAME "MapStudio")
-endif()
+set(PRODUCT_NAME "MapStudio")
 
 set(APP_RUNNING_NAME "${PRODUCT_NAME}")
 set(APP_RUNNING_DIR "${CMAKE_BINARY_DIR}/${APP_RUNNING_NAME}")

@@ -14,7 +14,7 @@
 
 enum MapSources {
   kMapSourcesAMap = 0,  // 高德地图
-  kMapSourcesTiamDiTu   // 天地图
+  kMapSourcesTianDiTu   // 天地图
 
 };
 

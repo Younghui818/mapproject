@@ -22,6 +22,7 @@ ninja-build/
 bld/
 [Bb]in/
 [Oo]bj/
+imageformats/
 
 # Visual Studio 2015 cache/options directory
 .vs/

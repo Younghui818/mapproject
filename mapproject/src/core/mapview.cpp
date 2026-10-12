@@ -260,7 +260,7 @@ void MapView::SwitchTileServer(MapSources sources, ImageType type,
         }
       }
       break;
-    case kMapSourcesTiamDiTu:
+    case kMapSourcesTianDiTu:
       if (type == kImageTypeSt) {
         // 卫星层
         layers_.append({LayerSat,
