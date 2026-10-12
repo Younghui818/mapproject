@@ -23,7 +23,7 @@ int main(int argc, char* argv[]) {
   }
 
   MapMainWidget view;
-  view.setWindowTitle("MapStudio - OSM Map Demo");
+  view.setWindowTitle("MapStudio - Map Demo");
   view.resize(600, 300);
   view.show();
   return app.exec();

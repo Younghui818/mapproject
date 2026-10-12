@@ -5,6 +5,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QWidget>
+#include <QVBoxLayout>
 
 #include "mapview.h"
 
@@ -15,12 +16,14 @@ class MapMainWidget : public QWidget {
   explicit MapMainWidget(QWidget* parent = nullptr);
   ~MapMainWidget() override = default;
 
- signals:
-
+  // UI slot for path saved/removed
  private slots:
   void SlotStartMouseAddPathChecked(int state);
   void SlotClearAllPath();
   void SlotUpdateMapSourceImage();
+  void SlotEndPath();
+  void SlotOnPathSaved(quint64 id, const QString& name);
+  void SlotOnPathRemoved(quint64 id);
 
  private:
   void InitUI();
@@ -35,6 +38,11 @@ class MapMainWidget : public QWidget {
   QCheckBox* cbx_show_cva_ = nullptr;
   QCheckBox* cbx_mouse_add_point_ = nullptr;
   QPushButton* btn_clear_all_path_ = nullptr;
+
+  // 新增：结束路径 & 路径列表容器
+  QPushButton* btn_end_path_ = nullptr;
+  QWidget* paths_list_widget_ = nullptr;
+  QVBoxLayout* paths_list_layout_ = nullptr;
 
   MapView* map_view_ = nullptr;
 };

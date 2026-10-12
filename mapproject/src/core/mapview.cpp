@@ -7,13 +7,17 @@
 #include <QNetworkProxy>
 #include <QScrollBar>
 #include <cmath>
+#include <QPainterPath>
+#include <QTransform>
 
 MapView::MapView(QWidget* parent)
     : QGraphicsView(parent),
       scene_(new QGraphicsScene(this)),
       nam_(new QNetworkAccessManager(this)),
       zoom_(12),
-      mouse_dragging_(false) {
+      mouse_dragging_(false),
+      path_pen_(QPen(Qt::red, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)),
+      marker_brush_(QBrush(Qt::red)) {
   setRenderHint(QPainter::SmoothPixmapTransform);
   setBackgroundBrush(QBrush(QColor(191, 191, 191)));
   setScene(scene_);
@@ -21,7 +25,6 @@ MapView::MapView(QWidget* parent)
   setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
   QNetworkProxyFactory::setUseSystemConfiguration(true);
-
   connect(nam_, &QNetworkAccessManager::finished, this,
           &MapView::SlotOnTileLoaded);
 
@@ -33,11 +36,10 @@ MapView::MapView(QWidget* parent)
   connect(verticalScrollBar(), &QScrollBar::valueChanged, this,
           [this] { scroll_timer_.start(150); });
 
-  int z = zoom_;
-  QPoint hz = LatLonToTile(30.2741, 120.1551, z);
+  QPoint hz = LatLonToTile(30.2741, 120.1551, zoom_);
   QPointF centerScene((hz.x() + 0.5) * 256.0, (hz.y() + 0.5) * 256.0);
 
-  SetSceneRectForZoom(z);  // 整世界场景矩形
+  SetSceneRectForZoom(zoom_);
   centerOn(centerScene);
   SlotLoadVisibleTiles();
   qDebug() << "[Init map view center] center:x" << centerScene.x()
@@ -45,58 +47,86 @@ MapView::MapView(QWidget* parent)
 }
 
 void MapView::wheelEvent(QWheelEvent* event) {
-  // 记住当前场景中心（zoom 改变后需要换算）
   QPointF oldCenter = mapToScene(viewport()->rect().center());
-  qDebug() << "[Scale map view old center] center:x" << oldCenter.x()
-           << " y:" << oldCenter.y();
   int oldZoom = zoom_;
 
   if (event->angleDelta().y() > 0 && zoom_ < 18)
     zoom_++;
   else if (event->angleDelta().y() < 0 && zoom_ > 3)
     zoom_--;
-  else {
+  else
     return;
-  }
 
-  for (auto& s : loaded_tiles_) s.clear();
-  scene_->clear();
-  ++epoch_;
-  // 场景 rect 随 zoom 改变
-  SetSceneRectForZoom(zoom_);
-
-  // 场景坐标按 zoom 差值等比缩放，保持地理位置不变
   double factor = std::pow(2.0, zoom_ - oldZoom);
+
+  // 仅清除瓦片
+  ClearTileItems();
+  loaded_tiles_.clear();
+  ++epoch_;
+
+  // 缩放路径（标记使用 ItemIgnoresTransformations，不缩放大小，只移动位置）
+  ScalePaths(factor);
+
+  SetSceneRectForZoom(zoom_);
   QPointF newCenter(oldCenter.x() * factor, oldCenter.y() * factor);
   centerOn(newCenter);
-  qDebug() << "[Scale map view new center] center:x" << newCenter.x()
-           << " y:" << newCenter.y();
+
   SlotLoadVisibleTiles();
   scroll_timer_.stop();
 }
 
 void MapView::mousePressEvent(QMouseEvent* event) {
   if (event->button() == Qt::LeftButton) {
-    mouse_dragging_ = true;
-    last_mouse_pos_ = event->pos();
-    setCursor(Qt::OpenHandCursor);
+    press_pos_ = event->pos();
+    potential_click_ = true;
+
+    if (adding_path_) {
+      // 先不立即添加，等 mouseRelease 确认是点击（未拖动）
+      return;
+    } else {
+      mouse_dragging_ = true;
+      last_mouse_pos_ = event->pos();
+      setCursor(Qt::OpenHandCursor);
+    }
   }
   QGraphicsView::mousePressEvent(event);
 }
 
 void MapView::mouseMoveEvent(QMouseEvent* event) {
+  if (adding_path_ && potential_click_) {
+    // 判断是否超过阈值，若超过则认为是拖拽
+    QPoint delta = event->pos() - press_pos_;
+    if (std::abs(delta.x()) > click_threshold_ || std::abs(delta.y()) > click_threshold_) {
+      potential_click_ = false;
+      // 启用拖拽行为（以便用户拖动地图）
+      mouse_dragging_ = true;
+      last_mouse_pos_ = event->pos();
+      setCursor(Qt::OpenHandCursor);
+    }
+  }
+
   if (mouse_dragging_) {
     QPoint delta = event->pos() - last_mouse_pos_;
     last_mouse_pos_ = event->pos();
-    // ★ 无 transform，视口像素 = 场景单位，直接累加
     horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
     verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
   }
+
   QGraphicsView::mouseMoveEvent(event);
 }
 
 void MapView::mouseReleaseEvent(QMouseEvent* event) {
   if (event->button() == Qt::LeftButton) {
+    if (adding_path_) {
+      if (potential_click_) {
+        // 被判定为点击（非拖拽）——添加点（mapToScene 以当前位置）
+        QPointF scenePt = mapToScene(event->pos());
+        AddPointToCurrentPath(scenePt);
+      }
+      potential_click_ = false;
+      // 如果在拖拽中，mouse_dragging_ 会在下面被清除
+    }
+
     mouse_dragging_ = false;
     setCursor(Qt::ArrowCursor);
   }
@@ -112,9 +142,6 @@ void MapView::SlotOnTileLoaded(QNetworkReply* reply) {
     return;
   }
 
-  int http = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-  QByteArray ctype =
-      reply->header(QNetworkRequest::ContentTypeHeader).toByteArray();
   QByteArray data = reply->readAll();
 
   if (reply->error() != QNetworkReply::NoError) {
@@ -128,8 +155,6 @@ void MapView::SlotOnTileLoaded(QNetworkReply* reply) {
   QBuffer buf(&data);
   r.setDevice(&buf);
   if (!r.canRead()) {
-    qDebug() << "[tile] reader cannot read, err=" << r.errorString()
-             << "formats=" << QImageReader::supportedImageFormats();
     loaded_tiles_[layerId].remove(key);
     reply->deleteLater();
     return;
@@ -138,7 +163,7 @@ void MapView::SlotOnTileLoaded(QNetworkReply* reply) {
   if (r.read(&img) && !img.isNull()) {
     auto* item = new QGraphicsPixmapItem(QPixmap::fromImage(img));
     item->setPos(key.x() * 256.0, key.y() * 256.0);
-    // 找该layer的opacity/z
+    item->setData(0, QVariant(true)); // 标识为瓦片
     double op = 1.0;
     int z = 0;
     for (auto& l : layers_)
@@ -157,12 +182,7 @@ void MapView::SlotOnTileLoaded(QNetworkReply* reply) {
 
 void MapView::SlotLoadVisibleTiles() {
   QRectF visibleRect = mapToScene(viewport()->rect()).boundingRect();
-
-  qDebug() << "[Get map view rect] x:" << visibleRect.x()
-           << " y:" << visibleRect.y() << " width:" << visibleRect.width()
-           << " height:" << visibleRect.height();
-
-  const double tileSize = 256.0;  // 瓦片永远 256 场景单位
+  const double tileSize = 256.0;
 
   int left = static_cast<int>(std::floor(visibleRect.left() / tileSize));
   int right = static_cast<int>(std::floor(visibleRect.right() / tileSize));
@@ -180,16 +200,13 @@ void MapView::SlotLoadVisibleTiles() {
         int sub = (x + y) % 4 + 1;
         QString url;
         if (ly.url_template.contains("tianditu")) {
-          // 天地图WMTS示例：col=x,row=y,matrix=zoom
-          url = ly.url_template.arg(sub).arg(x).arg(y).arg(
-              zoom_);  // 按你模板占位调整
+          url = ly.url_template.arg(sub).arg(x).arg(y).arg(zoom_);
         } else {
           url = ly.url_template.arg(sub).arg(x).arg(y).arg(zoom_);
         }
 
         QNetworkRequest req(url);
-        req.setHeader(QNetworkRequest::UserAgentHeader,
-                      "Mozilla/5.0 MapStudio/1.0");
+        req.setHeader(QNetworkRequest::UserAgentHeader, "Mozilla/5.0 MapStudio/1.0");
         if (url.contains("tianditu")) {
           req.setRawHeader("Referer", "https://www.tianditu.gov.cn/");
         } else if (url.contains("autonavi") || url.contains("amap")) {
@@ -199,8 +216,7 @@ void MapView::SlotLoadVisibleTiles() {
         }
         req.setAttribute(QNetworkRequest::User, QVariant::fromValue(key));
         req.setAttribute(EpochAttr(), QVariant::fromValue(epoch_));
-        req.setAttribute(layer_attr_,
-                         int(ly.id));  // 自定义attr存layer
+        req.setAttribute(layer_attr_, int(ly.id));
         nam_->get(req);
         loaded_tiles_[ly.id].insert(key);
       }
@@ -295,8 +311,199 @@ void MapView::SwitchTileServer(MapSources sources, ImageType type,
     default:
       break;
   }
-  for (auto& s : loaded_tiles_) s.clear();
-  scene_->clear();
+
+  // 仅清除瓦片项，不移除路径/标记
+  ClearTileItems();
+  loaded_tiles_.clear();
   ++epoch_;
   SlotLoadVisibleTiles();
+}
+
+void MapView::AddPointToCurrentPath(const QPointF& pt) {
+  current_path_points_.append(pt);
+
+  QPainterPath path;
+  if (!current_path_points_.isEmpty()) {
+    path.moveTo(current_path_points_.first());
+    for (int i = 1; i < current_path_points_.size(); ++i) {
+      path.lineTo(current_path_points_.at(i));
+    }
+  }
+
+  if (!current_path_item_) {
+    current_path_item_ = new QGraphicsPathItem(path);
+    current_path_item_->setPen(path_pen_);
+    current_path_item_->setZValue(2);
+    scene_->addItem(current_path_item_);
+  } else {
+    current_path_item_->setPath(path);
+  }
+
+  // 标记：创建忽略变换的 marker，使其在屏幕上保持恒定像素大小
+  auto* marker = new QGraphicsEllipseItem(-marker_pixel_radius_, -marker_pixel_radius_,
+                                          marker_pixel_radius_ * 2, marker_pixel_radius_ * 2);
+  marker->setBrush(marker_brush_);
+  marker->setPen(Qt::NoPen);
+  marker->setZValue(3);
+  marker->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+  // 将 marker 的位置设为路径点位置（pos 是 scene 坐标）
+  marker->setPos(pt);
+  scene_->addItem(marker);
+  current_path_markers_.append(marker);
+}
+
+void MapView::ClearTileItems() {
+  QList<QGraphicsItem*> items = scene_->items();
+  for (QGraphicsItem* it : items) {
+    QVariant v = it->data(0);
+    if (v.isValid() && v.toBool()) {
+      scene_->removeItem(it);
+      delete it;
+    }
+  }
+}
+
+void MapView::ScalePaths(double factor) {
+  if (qFuzzyCompare(factor, 1.0)) return;
+
+  // 缩放已保存路径与移动保存标记的位置（标记忽略变换，仅更新 pos）
+  for (auto* pItem : saved_path_items_) {
+    if (!pItem) continue;
+    QPainterPath p = pItem->path();
+    QTransform t;
+    t.scale(factor, factor);
+    pItem->setPath(t.map(p));
+  }
+  for (int pi = 0; pi < saved_path_markers_.size(); ++pi) {
+    auto& markers = saved_path_markers_[pi];
+    for (auto* m : markers) {
+      if (!m) continue;
+      QPointF p = m->pos();
+      m->setPos(p * factor);
+    }
+  }
+
+  // 当前路径
+  if (current_path_item_) {
+    QPainterPath p = current_path_item_->path();
+    QTransform t;
+    t.scale(factor, factor);
+    current_path_item_->setPath(t.map(p));
+  }
+  for (auto* m : current_path_markers_) {
+    if (!m) continue;
+    QPointF p = m->pos();
+    m->setPos(p * factor);
+  }
+
+  // 更新存储点（scene 坐标）
+  for (int i = 0; i < current_path_points_.size(); ++i) current_path_points_[i] *= factor;
+  for (auto& list : saved_path_items_) {
+    Q_UNUSED(list);
+  }
+  // Note: saved path points are embedded in QPainterPath; we updated path above.
+}
+
+quint64 MapView::SaveCurrentPath(const QString& name) {
+  if (!current_path_item_ || current_path_points_.isEmpty()) return 0;
+
+  quint64 id = next_path_id_++;
+  saved_path_items_.append(current_path_item_);
+  saved_path_markers_.append(current_path_markers_);
+  saved_path_ids_.append(id);
+  saved_path_names_.append(name.isEmpty() ? QString("Path %1").arg(id) : name);
+
+  // 清空 current
+  current_path_item_ = nullptr;
+  current_path_markers_.clear();
+  current_path_points_.clear();
+
+  emit PathSaved(id, saved_path_names_.last());
+  return id;
+}
+
+void MapView::RemoveSavedPathById(quint64 id) {
+  int idx = saved_path_ids_.indexOf(id);
+  if (idx < 0) return;
+  // remove path item
+  auto* p = saved_path_items_.at(idx);
+  if (p) {
+    scene_->removeItem(p);
+    delete p;
+  }
+  // remove markers
+  for (auto* m : saved_path_markers_.at(idx)) {
+    if (m) {
+      scene_->removeItem(m);
+      delete m;
+    }
+  }
+
+  saved_path_items_.removeAt(idx);
+  saved_path_markers_.removeAt(idx);
+  saved_path_names_.removeAt(idx);
+  saved_path_ids_.removeAt(idx);
+
+  emit PathRemoved(id);
+}
+
+void MapView::SetAddingPath(bool enable) {
+  adding_path_ = enable;
+  potential_click_ = false;
+  if (enable) {
+    // 清除当前未保存的 path（保留已保存）
+    if (current_path_item_) {
+      scene_->removeItem(current_path_item_);
+      delete current_path_item_;
+      current_path_item_ = nullptr;
+    }
+    for (auto* m : current_path_markers_) {
+      if (m) {
+        scene_->removeItem(m);
+        delete m;
+      }
+    }
+    current_path_markers_.clear();
+    current_path_points_.clear();
+  } else {
+    // 不自动保存，留给 SaveCurrentPath 由 UI 决定保存（也可直接保存）
+  }
+}
+
+void MapView::ClearAllPaths() {
+  // 已保存路径
+  for (auto* it : saved_path_items_) {
+    if (it) {
+      scene_->removeItem(it);
+      delete it;
+    }
+  }
+  saved_path_items_.clear();
+
+  for (auto& markers : saved_path_markers_) {
+    for (auto* m : markers) {
+      if (m) {
+        scene_->removeItem(m);
+        delete m;
+      }
+    }
+  }
+  saved_path_markers_.clear();
+  saved_path_names_.clear();
+  saved_path_ids_.clear();
+
+  // 当前路径
+  if (current_path_item_) {
+    scene_->removeItem(current_path_item_);
+    delete current_path_item_;
+    current_path_item_ = nullptr;
+  }
+  for (auto* m : current_path_markers_) {
+    if (m) {
+      scene_->removeItem(m);
+      delete m;
+    }
+  }
+  current_path_markers_.clear();
+  current_path_points_.clear();
 }
