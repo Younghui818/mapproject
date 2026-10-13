@@ -31,14 +31,14 @@ void MapMainWidget::InitUI() {
   operation_layout->setSpacing(10);
   main_layout->addWidget(widget_operation);
 
-  QWidget* widget_map_show = new QWidget(this);
-  widget_map_show->setObjectName("widget_map_show");
-  QVBoxLayout* widget_map_show_layout = new QVBoxLayout(widget_map_show);
+  widget_map_show_ = new QWidget(this);
+  widget_map_show_->setObjectName("widget_map_show");
+  QVBoxLayout* widget_map_show_layout = new QVBoxLayout(widget_map_show_);
   widget_map_show_layout->setContentsMargins(5, 5, 5, 5);
   widget_map_show_layout->setSpacing(10);
-  operation_layout->addWidget(widget_map_show);
+  operation_layout->addWidget(widget_map_show_);
 
-  QWidget* map_sourcer_switcher = new QWidget(widget_map_show);
+  QWidget* map_sourcer_switcher = new QWidget(widget_map_show_);
   map_sourcer_switcher->setObjectName("map_sourcer_switcher");
   QHBoxLayout* map_sourcer_switcher_layout =
       new QHBoxLayout(map_sourcer_switcher);
@@ -49,7 +49,7 @@ void MapMainWidget::InitUI() {
   map_sourcer_switcher_layout->addWidget(btn_tianditu_);
   widget_map_show_layout->addWidget(map_sourcer_switcher);
 
-  QWidget* image_switcher = new QWidget(widget_map_show);
+  QWidget* image_switcher = new QWidget(widget_map_show_);
   image_switcher->setObjectName("image_switcher");
   QHBoxLayout* switcher_layout = new QHBoxLayout(image_switcher);
   switcher_layout->setContentsMargins(5, 5, 5, 5);
@@ -59,7 +59,7 @@ void MapMainWidget::InitUI() {
   switcher_layout->addWidget(btn_st_);
   widget_map_show_layout->addWidget(image_switcher);
 
-  cbx_show_cva_ = new QCheckBox(widget_map_show);
+  cbx_show_cva_ = new QCheckBox(widget_map_show_);
   cbx_show_cva_->setText("show cva");
   widget_map_show_layout->addWidget(cbx_show_cva_);
   cbx_show_cva_->setChecked(true);
@@ -67,6 +67,19 @@ void MapMainWidget::InitUI() {
   operation_layout->addSpacing(10);
   btn_enter_3d_ = new QPushButton("enter 3d", widget_operation);
   operation_layout->addWidget(btn_enter_3d_);
+
+  widget_3d_map_show_ = new QWidget(this);
+  QHBoxLayout* widget_3d_map_show__layout =
+      new QHBoxLayout(widget_3d_map_show_);
+  widget_3d_map_show__layout->setContentsMargins(5, 5, 5, 5);
+  btn_show_point_ = new QRadioButton("point", this);
+  btn_show_mesh_ = new QRadioButton("mesh", this);
+  btn_show_texture_ = new QRadioButton("texture", this);
+  widget_3d_map_show__layout->addWidget(btn_show_point_);
+  widget_3d_map_show__layout->addWidget(btn_show_mesh_);
+  widget_3d_map_show__layout->addWidget(btn_show_texture_);
+  operation_layout->addWidget(widget_3d_map_show_);
+  widget_3d_map_show_->hide();
 
   operation_layout->addSpacing(10);
   cbx_mouse_add_point_ = new QCheckBox(widget_operation);
@@ -122,6 +135,12 @@ void MapMainWidget::SignalsLink() {
 
   connect(btn_enter_3d_, &QPushButton::clicked, this,
           &MapMainWidget::SlotOnEnter3DClicked);
+  connect(btn_show_point_, &QRadioButton::clicked, this,
+          &MapMainWidget::SlotUpdate3DMapShow);
+  connect(btn_show_mesh_, &QRadioButton::clicked, this,
+          &MapMainWidget::SlotUpdate3DMapShow);
+  connect(btn_show_texture_, &QRadioButton::clicked, this,
+          &MapMainWidget::SlotUpdate3DMapShow);
 }
 
 void MapMainWidget::SlotUpdateMapSourceImage() {
@@ -191,29 +210,46 @@ void MapMainWidget::SlotOnPathRemoved(quint64 id) {
 void MapMainWidget::SlotOnEnter3DClicked() {
   if (!map_view_) return;
 
-  // 获取当前地图中心经纬
-  QPointF centerScene =
-      map_view_->mapToScene(map_view_->viewport()->rect().center());
-  double lat = 0, lon = 0;
-  if (!map_view_->SceneToLatLon(centerScene, lat, lon)) {
-    // 无法转换
-    return;
+  bool map_view_show = map_view_->isVisible();
+  if (map_view_show) {
+    // 获取当前地图中心经纬
+    QPointF centerScene =
+        map_view_->mapToScene(map_view_->viewport()->rect().center());
+    double lat = 0, lon = 0;
+    if (!map_view_->SceneToLatLon(centerScene, lat, lon)) {
+      // 无法转换
+      return;
+    }
+
+    // 100km 半径
+    double radiusMeters = 1000.0;
+    connect(w3d_widget_, &Map3DWidget::SignalReady, this, [this]() {
+      // 3D ready，后续 UI 切换逻辑...
+      qDebug() << "3D ready";
+    });
+    connect(w3d_widget_, &Map3DWidget::Failed, this,
+            [this](const QString& reason) {
+              qWarning() << "3D build failed:" << reason;
+            });
+
+    w3d_widget_->Build3DFromCenter(lat, lon, radiusMeters);
   }
 
-  // 隐藏2D视图并创建 3D 窗口（简单替换）
-  map_view_->hide();
-  w3d_widget_->show();
+  map_view_->setVisible(!map_view_show);
+  w3d_widget_->setVisible(map_view_show);
+  widget_map_show_->setVisible(!map_view_show);
+  widget_3d_map_show_->setVisible(map_view_show);
+}
 
-  // 100km 半径
-  double radiusMeters = 1000.0;
-  connect(w3d_widget_, &Map3DWidget::SignalReady, this, [this]() {
-    // 3D ready，后续 UI 切换逻辑...
-    qDebug() << "3D ready";
-  });
-  connect(w3d_widget_, &Map3DWidget::Failed, this,
-          [this](const QString& reason) {
-            qWarning() << "3D build failed:" << reason;
-          });
-
-  w3d_widget_->Build3DFromCenter(lat, lon, radiusMeters);
+void MapMainWidget::SlotUpdate3DMapShow() {
+  // 切换3d显示模式
+  if (w3d_widget_) {
+    if (btn_show_point_->isChecked()) {
+      w3d_widget_->UpdateMap3dShowType(kMap3DShowTypePoint);
+    } else if (btn_show_mesh_->isChecked()) {
+      w3d_widget_->UpdateMap3dShowType(kMap3DShowTypeMesh);
+    } else {
+      w3d_widget_->UpdateMap3dShowType(kMap3DShowTypeTexture);
+    }
+  }
 }

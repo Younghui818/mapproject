@@ -58,3 +58,20 @@ if(MSVC)
 endif()
 
 # ========== 自动部署 Qt DLL (替代 copy_directory) ==========
+set(QT_RUNTIME_CACHE "${CMAKE_BINARY_DIR}/_qt_runtime_cache")
+set(QT_DEPLOY_SCRIPT "${CMAKE_SOURCE_DIR}/scripts/deploy_qt.bat")
+
+# 全量部署：慢，按需手动执行
+add_custom_target(deploy_qt_full
+  COMMAND "${QT_DEPLOY_SCRIPT}" "$<TARGET_FILE_DIR:MapStudio>" "${QT_RUNTIME_CACHE}" FULL
+  COMMENT "[deploy] Full Qt deploy into cache"
+  VERBATIM
+)
+add_dependencies(deploy_qt_full MapStudio)
+
+# 增量同步：每次构建后跑，通常 1 秒内
+add_custom_command(TARGET MapStudio POST_BUILD
+  COMMAND "${QT_DEPLOY_SCRIPT}" "$<TARGET_FILE_DIR:MapStudio>" "${QT_RUNTIME_CACHE}"
+  COMMENT "[deploy] Sync Qt runtime -> $<TARGET_FILE_DIR:MapStudio>"
+  VERBATIM
+)

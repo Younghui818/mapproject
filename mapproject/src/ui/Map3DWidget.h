@@ -1,7 +1,8 @@
 #pragma once
 #include <QWidget>
 
-class Scene3DRenderer;
+#include "Scene3DRenderer.h"
+
 class TileDownloader;
 class TileStitcher;
 class DemProcessor;
@@ -9,21 +10,26 @@ class MeshBuilder;
 
 class Map3DWidget : public QWidget {
   Q_OBJECT
-public:
+ public:
   explicit Map3DWidget(QWidget* parent = nullptr);
   ~Map3DWidget() override;
 
   // 异步启动构建流程
-  void Build3DFromCenter(double centerLat, double centerLon, double radiusMeters);
+  void Build3DFromCenter(double centerLat, double centerLon,
+                         double radiusMeters);
 
-signals:
+  void UpdateMap3dShowType(Map3DShowType type);
+
+ signals:
   void SignalReady();
   void Failed(const QString& reason);
 
-private:
+ private:
   Scene3DRenderer* renderer_;
   TileDownloader* downloader_;
   TileStitcher* stitcher_;
   DemProcessor* dem_;
   MeshBuilder* meshBuilder_;
+
+  Map3DShowType type_ = kMap3DShowTypePoint;
 };

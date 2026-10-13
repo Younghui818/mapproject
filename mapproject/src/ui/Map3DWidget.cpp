@@ -39,16 +39,14 @@ Map3DWidget::~Map3DWidget() = default;
 
 void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
                                     double radiusMeters) {
-  QImage testImg(256, 256, QImage::Format_Grayscale8);
+  QImage img(256, 256, QImage::Format_Grayscale8);
   for (int y = 0; y < 256; ++y) {
-    uchar* line = testImg.scanLine(y);
-    // 改成 /2：避免 (x+y)%256 在 255→0 处突变产生断层锯齿
+    uchar* line = img.scanLine(y);
     for (int x = 0; x < 256; ++x) line[x] = static_cast<uchar>((x + y) / 2);
   }
 
-  renderer_->SetPointSize(6.0f);  // 先大一点，看清点阵
-  renderer_->SetPointCloud(testImg, 100.0, 100.0, 100.0,
-                           2);  // 128×128 = 16384 点
+  renderer_->SetPointSize(6.0f);
+  renderer_->SetHeightData(img, 100.0, 100.0, 100.0);  // 喂数据，默认点云
 
   return;
 
@@ -208,4 +206,11 @@ void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
       [shared, onBothDone]() {
         if (shared->pendingGroups.fetchAndSubAcquire(1) == 1) onBothDone();
       });
+}
+
+void Map3DWidget::UpdateMap3dShowType(Map3DShowType type) {
+  if (!renderer_) {
+    return;
+  }
+  renderer_->SetShowType(type);
 }
