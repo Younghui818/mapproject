@@ -69,15 +69,25 @@ void MapMainWidget::InitUI() {
   operation_layout->addWidget(btn_enter_3d_);
 
   widget_3d_map_show_ = new QWidget(this);
-  QHBoxLayout* widget_3d_map_show__layout =
-      new QHBoxLayout(widget_3d_map_show_);
-  widget_3d_map_show__layout->setContentsMargins(5, 5, 5, 5);
+  QVBoxLayout* widget_3d_map_show_layout = new QVBoxLayout(widget_3d_map_show_);
+
+  QWidget* widget_3d_show_type = new QWidget(widget_3d_map_show_);
+  QHBoxLayout* widget_3d_show_type_layout =
+      new QHBoxLayout(widget_3d_show_type);
+  widget_3d_show_type_layout->setContentsMargins(5, 5, 5, 5);
   btn_show_point_ = new QRadioButton("point", this);
   btn_show_mesh_ = new QRadioButton("mesh", this);
   btn_show_texture_ = new QRadioButton("texture", this);
-  widget_3d_map_show__layout->addWidget(btn_show_point_);
-  widget_3d_map_show__layout->addWidget(btn_show_mesh_);
-  widget_3d_map_show__layout->addWidget(btn_show_texture_);
+  widget_3d_show_type_layout->addWidget(btn_show_point_);
+  widget_3d_show_type_layout->addWidget(btn_show_mesh_);
+  widget_3d_show_type_layout->addWidget(btn_show_texture_);
+  widget_3d_map_show_layout->addWidget(widget_3d_show_type);
+
+  slider_3d_height_scal_ =
+      new QSlider(Qt::Orientation::Horizontal, widget_3d_map_show_);
+  slider_3d_height_scal_->setRange(0, 300);
+  widget_3d_map_show_layout->addWidget(slider_3d_height_scal_);
+
   operation_layout->addWidget(widget_3d_map_show_);
   widget_3d_map_show_->hide();
 
@@ -141,6 +151,8 @@ void MapMainWidget::SignalsLink() {
           &MapMainWidget::SlotUpdate3DMapShow);
   connect(btn_show_texture_, &QRadioButton::clicked, this,
           &MapMainWidget::SlotUpdate3DMapShow);
+  connect(slider_3d_height_scal_, &QSlider::valueChanged, this,
+          &MapMainWidget::SlotUpdate3dHeightScal);
 }
 
 void MapMainWidget::SlotUpdateMapSourceImage() {
@@ -233,6 +245,11 @@ void MapMainWidget::SlotOnEnter3DClicked() {
             });
 
     w3d_widget_->Build3DFromCenter(lat, lon, radiusMeters);
+
+    btn_show_point_->setChecked(true);
+    btn_enter_3d_->setText("quit 3d");
+  } else {
+    btn_enter_3d_->setText("enter 3d");
   }
 
   map_view_->setVisible(!map_view_show);
@@ -251,5 +268,11 @@ void MapMainWidget::SlotUpdate3DMapShow() {
     } else {
       w3d_widget_->UpdateMap3dShowType(kMap3DShowTypeTexture);
     }
+  }
+}
+
+void MapMainWidget::SlotUpdate3dHeightScal(int scal) {
+  if (w3d_widget_) {
+    w3d_widget_->SetDemExaggeration(scal / 10);
   }
 }

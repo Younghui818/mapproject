@@ -1,7 +1,11 @@
 #include "Map3DWidget.h"
 
+#include <QMap>
+#include <QPair>
+#include <QSharedPointer>
 #include <QVBoxLayout>
 #include <QtMath>
+#include <algorithm>
 #include <cmath>
 #include <random>
 #include <vector>
@@ -12,21 +16,46 @@
 #include "TileDownloader.h"
 #include "TileStitcher.h"
 
-// 简化：选固定 zoom 值（可改为根据 radius 计算）
-static int ChooseImageZoom(double /*radiusMeters*/) { return 11; }
-static int ChooseDemZoom(double /*radiusMeters*/) { return 13; }
+namespace {
+// ---- 规模上限：按需调整 ----
+constexpr int kMaxDemTiles = 64;         // 下载瓦片上限 8×8（想要更大改这个）
+constexpr int kHardMaxTiles = 100;       // 绝对硬上限，防异常
+constexpr int kTargetGridMax = 1024;     // 拼接后超过此分辨率就重采样
+constexpr int kMaxMeshVerts = 400000;    // 网格顶点上限
+constexpr int kMaxCloudPoints = 250000;  // 点云点数上限
 
-static QPoint LonLatToTileXY(double lat, double lon, int zoom) {
-  double latRad = lat * M_PI / 180.0;
-  int n = 1 << zoom;
-  int x = static_cast<int>(std::floor((lon + 180.0) / 360.0 * n));
-  int y = static_cast<int>(std::floor(
-      (1.0 - std::log(std::tan(latRad) + 1.0 / std::cos(latRad)) / M_PI) / 2.0 *
-      n));
-  return QPoint(x, y);
+// 双线性重采样（高程数据用双线性比最邻近平滑，不会出现台阶）
+void ResampleGrid(const std::vector<float>& src, int sc, int sr,
+                  std::vector<float>& dst, int dc, int dr) {
+  dst.assign(size_t(dc) * dr, 0.0f);
+  if (src.empty() || sc < 2 || sr < 2 || dc < 2 || dr < 2) return;
+  for (int r = 0; r < dr; ++r) {
+    const float fy = float(r) * float(sr - 1) / float(dr - 1);
+    const int y0 = int(fy);
+    const int y1 = std::min(y0 + 1, sr - 1);
+    const float ty = fy - y0;
+    for (int c = 0; c < dc; ++c) {
+      const float fx = float(c) * float(sc - 1) / float(dc - 1);
+      const int x0 = int(fx);
+      const int x1 = std::min(x0 + 1, sc - 1);
+      const float tx = fx - x0;
+      const float a = src[size_t(y0) * sc + x0];
+      const float b = src[size_t(y0) * sc + x1];
+      const float d = src[size_t(y1) * sc + x0];
+      const float e = src[size_t(y1) * sc + x1];
+      dst[size_t(r) * dc + c] =
+          (a * (1 - tx) + b * tx) * (1 - ty) + (d * (1 - tx) + e * tx) * ty;
+    }
+  }
 }
 
-namespace {
+// 按上限自适应抽稀步长
+int AutoStep(int n, int maxCount) {
+  const long long total = 1LL * n * n;
+  if (total <= maxCount) return 1;
+  return std::max(1, int(std::ceil(std::sqrt(double(total) / maxCount))));
+}
+
 // 多峰高斯 + 平滑噪声，生成有真实起伏的 demo 高程图
 QImage MakeDemoTerrain(int size = 256) {
   const int nL = 16;  // 低频噪声网格
@@ -70,7 +99,169 @@ QImage MakeDemoTerrain(int size = 256) {
   }
   return img;
 }
+
+struct DemDecode {
+  std::vector<float> h;
+  int w = 0, hgt = 0;
+  float minH = 0, maxH = 0;
+  bool ok = false;
+};
+
+struct DemGrid {
+  std::vector<float> h;
+  int cols = 0, rows = 0;
+  double widthMeters = 0, depthMeters = 0;
+  float minH = 0, maxH = 0;
+  int missing = 0;
+  bool ok = false;
+};
+
+inline float terrariumElev(QRgb p) {
+  return (qRed(p) * 256.0f + qGreen(p) + qBlue(p) / 256.0f) - 32768.0f;
+}
+
+// Terrarium: elev = (R*256 + G + B/256) - 32768
+DemDecode DecodeTerrarium(const QByteArray& png) {
+  DemDecode d;
+  QImage img;
+  if (png.isEmpty() || !img.loadFromData(png)) {
+    qWarning() << "[dem] load failed, bytes:" << png.size();
+    return d;
+  }
+  img = img.convertToFormat(QImage::Format_RGB32);
+  d.w = img.width();
+  d.hgt = img.height();
+  d.h.resize(size_t(d.w) * d.hgt);
+  float mn = 1e30f, mx = -1e30f;
+  for (int y = 0; y < d.hgt; ++y)
+    for (int x = 0; x < d.w; ++x) {
+      const QRgb p = img.pixel(x, y);
+      const float e =
+          (qRed(p) * 256.0f + qGreen(p) + qBlue(p) / 256.0f) - 32768.0f;
+      d.h[size_t(y) * d.w + x] = e;
+      mn = std::min(mn, e);
+      mx = std::max(mx, e);
+    }
+  d.minH = mn;
+  d.maxH = mx;
+  d.ok = true;
+  return d;
+}
+
+// 多瓦片拼接：按行列摆进一张大 grid
+DemGrid StitchTerrarium(const QMap<QPair<int, int>, QByteArray>& tiles, int x0,
+                        int y0, int x1, int y1) {
+  DemGrid g;
+  const int nx = x1 - x0 + 1, ny = y1 - y0 + 1;
+  g.cols = nx * 256;
+  g.rows = ny * 256;
+  g.h.assign(size_t(g.cols) * g.rows, 0.0f);
+
+  double sum = 0.0;
+  qint64 cnt = 0;
+  std::vector<char> filled(size_t(nx) * ny, 0);
+
+  for (int ty = y0; ty <= y1; ++ty) {
+    for (int tx = x0; tx <= x1; ++tx) {
+      const int slot = (ty - y0) * nx + (tx - x0);
+      const QByteArray ba = tiles.value(qMakePair(tx, ty));
+      QImage img;
+      if (ba.isEmpty() || !img.loadFromData(ba)) {
+        g.missing++;
+        continue;
+      }
+      img = img.convertToFormat(QImage::Format_RGB32);
+
+      const int ox = (tx - x0) * 256, oy = (ty - y0) * 256;
+      for (int y = 0; y < 256; ++y)
+        for (int x = 0; x < 256; ++x) {
+          const float e = terrariumElev(img.pixel(x, y));
+          g.h[size_t(oy + y) * g.cols + (ox + x)] = e;
+          sum += e;
+          cnt++;
+        }
+      filled[slot] = 1;
+    }
+  }
+
+  // 失败瓦片用已成功区域的均值填充，避免出现假深谷
+  if (g.missing > 0 && cnt > 0) {
+    const float mean = float(sum / double(cnt));
+    for (int ty = y0; ty <= y1; ++ty)
+      for (int tx = x0; tx <= x1; ++tx) {
+        if (filled[size_t(ty - y0) * nx + (tx - x0)]) continue;
+        const int ox = (tx - x0) * 256, oy = (ty - y0) * 256;
+        for (int y = 0; y < 256; ++y)
+          for (int x = 0; x < 256; ++x)
+            g.h[size_t(oy + y) * g.cols + (ox + x)] = mean;
+      }
+  }
+
+  // 稳健化：按 1%/99% 分位裁剪，避免个别异常值压扁色带
+  if (cnt > 0) {
+    std::vector<float> s(g.h.begin(), g.h.end());
+    std::sort(s.begin(), s.end());
+    const size_t lo = size_t(s.size() * 0.01), hi = size_t(s.size() * 0.99);
+    const float vlo = s[lo], vhi = s[std::min(hi, s.size() - 1)];
+    for (auto& v : g.h) v = std::clamp(v, vlo, vhi);
+    g.minH = vlo;
+    g.maxH = vhi;
+  }
+  g.ok = (cnt > 0);
+  return g;
+}
 }  // namespace
+
+// 简化：选固定 zoom 值（可改为根据 radius 计算）
+static int ChooseImageZoom(double /*radiusMeters*/) { return 11; }
+
+static QPoint LonLatToTileXY(double lat, double lon, int zoom) {
+  double latRad = lat * M_PI / 180.0;
+  int n = 1 << zoom;
+  int x = static_cast<int>(std::floor((lon + 180.0) / 360.0 * n));
+  int y = static_cast<int>(std::floor(
+      (1.0 - std::log(std::tan(latRad) + 1.0 / std::cos(latRad)) / M_PI) / 2.0 *
+      n));
+  return QPoint(x, y);
+}
+
+// 按目标跨度反算 zoom，使总像素落在 ~800px，并限制瓦片数量不超过 4×4
+static int ChooseDemZoom(double radiusMeters, double centerLat,
+                         double centerLon, int* nxOut = nullptr,
+                         int* nyOut = nullptr) {
+  const double equatorRes = 40075016.686 / 256.0;  // zoom0 赤道分辨率 m/px
+  const double cosLat = std::max(0.05, std::cos(centerLat * M_PI / 180.0));
+  const double targetRes = (2.0 * radiusMeters) / 800.0;
+
+  int z = std::clamp(int(std::round(std::log2((equatorRes * cosLat) /
+                                              std::max(1e-6, targetRes)))),
+                     4, 14);
+
+  // 用 centerLat / centerLon 推导瓦片跨度
+  auto tileSpan = [&](int zz, int& nx, int& ny) {
+    const double latD = (radiusMeters / 6371000.0) * 180.0 / M_PI;
+    const double lonD = (radiusMeters / (6371000.0 * cosLat)) * 180.0 / M_PI;
+    const QPoint a = LonLatToTileXY(centerLat + latD, centerLon - lonD, zz);
+    const QPoint b = LonLatToTileXY(centerLat - latD, centerLon + lonD, zz);
+    nx = std::abs(b.x() - a.x()) + 1;
+    ny = std::abs(b.y() - a.y()) + 1;
+  };
+
+  int nx = 1, ny = 1;
+  tileSpan(z, nx, ny);
+  while (z > 4 && nx * ny > kMaxDemTiles) {
+    --z;
+    tileSpan(z, nx, ny);
+  }
+  if (nxOut) *nxOut = nx;
+  if (nyOut) *nyOut = ny;
+  return z;
+}
+
+// Web Mercator 分辨率 (m/px)
+static double MercatorRes(double lat, int zoom) {
+  return 156543.03392804097 * std::cos(lat * M_PI / 180.0) / double(1 << zoom);
+}
 
 Map3DWidget::Map3DWidget(QWidget* parent)
     : QWidget(parent),
@@ -88,72 +279,46 @@ Map3DWidget::~Map3DWidget() = default;
 
 void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
                                     double radiusMeters) {
-  renderer_->SetPointSize(5.0f);
-  renderer_->SetMeshStep(2);  // 128×128 网格
-  renderer_->SetHeightData(MakeDemoTerrain(256),
-                           /*width=*/200.0, /*depth=*/200.0,
-                           /*maxHeight=*/45.0);
+  constexpr bool kAlsoFetchImagery = false;  // 贴图阶段再打开
 
-  return;
+  int nx = 1, ny = 1;
+  const int demZ = ChooseDemZoom(radiusMeters, centerLat, centerLon, &nx, &ny);
 
-  // 1) 选择 zoom
-  int imgZ = ChooseImageZoom(radiusMeters);
-  int demZ = ChooseDemZoom(radiusMeters);
-
-  // 2) 计算 bbox（近似：经纬度差）
   constexpr double R = 6371000.0;
-  double latDelta = (radiusMeters / R) * 180.0 / M_PI;
-  double lonDelta =
-      (radiusMeters / (R * qCos(centerLat * M_PI / 180.0))) * 180.0 / M_PI;
-  double minLat = centerLat - latDelta;
-  double maxLat = centerLat + latDelta;
-  double minLon = centerLon - lonDelta;
-  double maxLon = centerLon + lonDelta;
+  const double latDelta = (radiusMeters / R) * 180.0 / M_PI;
+  const double lonDelta =
+      (radiusMeters /
+       (R * std::max(0.05, std::cos(centerLat * M_PI / 180.0)))) *
+      180.0 / M_PI;
 
-  // 3) 计算需要的 tile 范围（image）
-  QPoint t00 =
-      LonLatToTileXY(maxLat, minLon, imgZ);  // note: lat flips for tile Y
-  QPoint t11 = LonLatToTileXY(minLat, maxLon, imgZ);
-  int tx0 = qMin(t00.x(), t11.x());
-  int tx1 = qMax(t00.x(), t11.x());
-  int ty0 = qMin(t00.y(), t11.y());
-  int ty1 = qMax(t00.y(), t11.y());
+  const QPoint d00 =
+      LonLatToTileXY(centerLat + latDelta, centerLon - lonDelta, demZ);
+  const QPoint d11 =
+      LonLatToTileXY(centerLat - latDelta, centerLon + lonDelta, demZ);
+  int dx0 = qMin(d00.x(), d11.x()), dx1 = qMax(d00.x(), d11.x());
+  int dy0 = qMin(d00.y(), d11.y()), dy1 = qMax(d00.y(), d11.y());
 
-  QVector<TileRequest> imgReqs;
-  for (int ty = ty0; ty <= ty1; ++ty) {
-    for (int tx = tx0; tx <= tx1; ++tx) {
-      TileRequest r;
-      // 使用 天地图 作为示例底图
-      r.url = QUrl(
-          QString(
-              "https://t0.tianditu.gov.cn/img_w/"
-              "wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER="
-              "img&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILECOL="
-              "%1&TILEROW=%2&TILEMATRIX=%3&tk=4e17baf1ebcefc505f3121c67950cd71")
-              .arg(tx)
-              .arg(ty)
-              .arg(imgZ));
-      r.x = tx;
-      r.y = ty;
-      r.z = imgZ;
-      r.layer = 0;
-      imgReqs.append(r);
-    }
+  // 保险：硬上限 4×4
+  if ((dx1 - dx0 + 1) * (dy1 - dy0 + 1) > kMaxDemTiles) {
+    const int cx = (dx0 + dx1) / 2, cy = (dy0 + dy1) / 2;
+    const int half = int(std::sqrt(double(kMaxDemTiles))) / 2;
+    dx0 = cx - half;
+    dx1 = cx + half - 1;
+    dy0 = cy - half;
+    dy1 = cy + half - 1;
   }
-
-  // 4) DEM tiles 范围（使用 demZ）
-  QPoint d00 = LonLatToTileXY(maxLat, minLon, demZ);
-  QPoint d11 = LonLatToTileXY(minLat, maxLon, demZ);
-  int dx0 = qMin(d00.x(), d11.x());
-  int dx1 = qMax(d00.x(), d11.x());
-  int dy0 = qMin(d00.y(), d11.y());
-  int dy1 = qMax(d00.y(), d11.y());
+  if ((dx1 - dx0 + 1) * (dy1 - dy0 + 1) > kHardMaxTiles) {
+    qWarning() << "[dem] tile count exceeds hard limit, abort";
+    return;
+  }
+  const int cntX = dx1 - dx0 + 1, cntY = dy1 - dy0 + 1;
+  qDebug() << "[dem] z" << demZ << "tiles" << cntX << "x" << cntY << "range x["
+           << dx0 << "," << dx1 << "] y[" << dy0 << "," << dy1 << "]";
 
   QVector<TileRequest> demReqs;
-  for (int ty = dy0; ty <= dy1; ++ty) {
+  for (int ty = dy0; ty <= dy1; ++ty)
     for (int tx = dx0; tx <= dx1; ++tx) {
       TileRequest r;
-      // Terrarium
       r.url = QUrl(QString("https://s3.amazonaws.com/elevation-tiles-prod/"
                            "terrarium/%1/%2/%3.png")
                        .arg(demZ)
@@ -165,93 +330,77 @@ void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
       r.layer = 1;
       demReqs.append(r);
     }
-  }
 
-  struct SharedData {
-    QMap<QPair<int, int>, QImage> imageTiles;
-    QMap<QPair<int, int>, QByteArray> demTiles;
-    QAtomicInt pendingGroups{2};
-    // 捕获所需的范围参数
-    int tx0, ty0, tx1, ty1;
-    int dx0, dy0, dx1, dy1;
-  };
-  auto shared = QSharedPointer<SharedData>::create();
-  shared->tx0 = tx0;
-  shared->ty0 = ty0;
-  shared->tx1 = tx1;
-  shared->ty1 = ty1;
-  shared->dx0 = dx0;
-  shared->dy0 = dy0;
-  shared->dx1 = dx1;
-  shared->dy1 = dy1;
+  auto shared = QSharedPointer<QMap<QPair<int, int>, QByteArray>>::create();
+  const double mpp = MercatorRes(centerLat, demZ);  // 米/像素
 
-  // 统一的完成处理（消除重复代码）
-  auto onBothDone = [this, shared]() {
-    // Stitch images
-    QVector<QImage> imgs;
-    for (int ty = shared->ty0; ty <= shared->ty1; ++ty)
-      for (int tx = shared->tx0; tx <= shared->tx1; ++tx) {
-        auto k = qMakePair(tx, ty);
-        if (shared->imageTiles.contains(k))
-          imgs.append(shared->imageTiles.value(k));
-        else {
-          QImage blank(256, 256, QImage::Format_RGBA8888);
-          blank.fill(Qt::transparent);
-          imgs.append(blank);
-        }
-      }
-    QImage stitched = stitcher_->StitchImages(
-        imgs, shared->tx1 - shared->tx0 + 1, shared->ty1 - shared->ty0 + 1);
-    QImage tex = stitcher_->ResizeIfNeeded(stitched, 4096);
-
-    // Decode DEM
-    QVector<QByteArray> demData;
-    for (int ty = shared->dy0; ty <= shared->dy1; ++ty)
-      for (int tx = shared->dx0; tx <= shared->dx1; ++tx)
-        demData.append(shared->demTiles.value(qMakePair(tx, ty)));
-
-    DemProcessor::HeightGrid grid =
-        dem_->DecodeAndResample(demData, shared->dx1 - shared->dx0 + 1,
-                                shared->dy1 - shared->dy0 + 1, 256, 100.0);
-
-    QImage heightMap(grid.width, grid.height, QImage::Format_Grayscale8);
-    float maxH = 100.0f;
-    for (int y = 0; y < grid.height; ++y) {
-      for (int x = 0; x < grid.width; ++x) {
-        float h = grid.heights[y * grid.width + x];
-        uchar val = static_cast<uchar>(qBound(0.0f, h / maxH * 255.0f, 255.0f));
-        heightMap.setPixel(x, y, qRgb(val, val, val));
-      }
-    }
-
-    // renderer_->SetHeightMap(heightMap, 100.0, 100.0, 100.0);
-    emit SignalReady();
-  };
-
-  // Image 下载
-  downloader_->DownloadTiles(
-      imgReqs,
-      [shared](const TileRequest& tr, const QByteArray& data, const QString&) {
-        auto k = qMakePair(tr.x, tr.y);
-        if (!data.isEmpty()) {
-          QImage img;
-          img.loadFromData(data);
-          if (!img.isNull()) shared->imageTiles.insert(k, img);
-        }
-      },
-      [shared, onBothDone]() {
-        if (shared->pendingGroups.fetchAndSubAcquire(1) == 1) onBothDone();
-      });
-
-  // DEM 下载
   downloader_->DownloadTiles(
       demReqs,
-      [shared](const TileRequest& tr, const QByteArray& data, const QString&) {
-        shared->demTiles.insert(qMakePair(tr.x, tr.y), data);
+      [shared](const TileRequest& tr, const QByteArray& data,
+               const QString& err) {
+        if (data.isEmpty()) {
+          qWarning() << "[dem] fail" << tr.x << tr.y << err;
+          return;
+        }
+        shared->insert(qMakePair(tr.x, tr.y), data);
       },
-      [shared, onBothDone]() {
-        if (shared->pendingGroups.fetchAndSubAcquire(1) == 1) onBothDone();
+      [this, shared, dx0, dy0, dx1, dy1, mpp]() {
+        DemGrid g = StitchTerrarium(*shared, dx0, dy0, dx1, dy1);
+        if (!g.ok) {
+          qWarning() << "[dem] no tiles decoded";
+          return;
+        }
+
+        // ★ 地面尺寸必须在重采样【之前】算：用原始分辨率 × 米/像素
+        //   重采样只降分辨率，不改变地理范围
+        g.widthMeters = g.cols * mpp;
+        g.depthMeters = g.rows * mpp;
+        qDebug() << "[dem] grid" << g.cols << "x" << g.rows << "ground"
+                 << int(g.widthMeters) << "x" << int(g.depthMeters)
+                 << "m  relief" << g.minH << "→" << g.maxH << "missing"
+                 << g.missing;
+
+        // ---- 超分辨率就重采样（地理范围不变）----
+        if (std::max(g.cols, g.rows) > kTargetGridMax) {
+          const double k =
+              double(kTargetGridMax) / double(std::max(g.cols, g.rows));
+          const int nc = std::max(2, int(g.cols * k));
+          const int nr = std::max(2, int(g.rows * k));
+          std::vector<float> rs;
+          ResampleGrid(g.h, g.cols, g.rows, rs, nc, nr);
+          qDebug() << "[dem] resample" << g.cols << "x" << g.rows << "->" << nc
+                   << "x" << nr;
+          g.h = std::move(rs);
+          g.cols = nc;
+          g.rows = nr;
+        }
+
+        // 顺序：先喂数据，再调参数（避免重复 rebuild）
+        renderer_->SetHeightGrid(g.h, g.cols, g.rows, g.widthMeters,
+                                 g.depthMeters);
+
+        const int meshStep = AutoStep(g.cols, kMaxMeshVerts);
+        const int pointStep = AutoStep(g.cols, kMaxCloudPoints);
+        renderer_->SetVerticalExaggeration(std::clamp(
+            g.widthMeters / (std::max(1.0, double(g.maxH - g.minH)) * 25.0),
+            1.0, 8.0));
+        renderer_->SetMeshStep(meshStep);
+        renderer_->SetPointStep(pointStep);
+        renderer_->SetPointSize(4.0f);
+
+        qDebug() << "[dem] step mesh" << meshStep << "point" << pointStep
+                 << "verts~" << (g.cols / meshStep) * (g.rows / meshStep);
+
+        emit SignalReady();
       });
+
+  if constexpr (kAlsoFetchImagery) {
+    // TODO: 影像瓦片下载（贴图阶段启用），沿用同样的拼接思路
+  }
+}
+
+void Map3DWidget::SetDemExaggeration(double k) {
+  if (renderer_) renderer_->SetVerticalExaggeration(k);
 }
 
 void Map3DWidget::UpdateMap3dShowType(Map3DShowType type) {
@@ -259,4 +408,61 @@ void Map3DWidget::UpdateMap3dShowType(Map3DShowType type) {
     return;
   }
   renderer_->SetShowType(type);
+}
+
+void Map3DWidget::Show3DImageDemo() {
+  renderer_->SetPointSize(5.0f);
+  renderer_->SetMeshStep(2);  // 128×128 网格
+  renderer_->SetHeightData(MakeDemoTerrain(256),
+                           /*width=*/200.0, /*depth=*/200.0,
+                           /*maxHeight=*/45.0);
+
+  return;
+}
+
+void Map3DWidget::Build3DFromDemTile(double centerLat, double centerLon,
+                                     int zoom) {
+  const QPoint t = LonLatToTileXY(centerLat, centerLon, zoom);
+  const double metersPerTile =
+      40075016.686 * std::cos(centerLat * M_PI / 180.0) / double(1 << zoom);
+
+  TileRequest r;
+  r.url = QUrl(QString("https://s3.amazonaws.com/elevation-tiles-prod/"
+                       "terrarium/%1/%2/%3.png")
+                   .arg(zoom)
+                   .arg(t.x())
+                   .arg(t.y()));
+  r.x = t.x();
+  r.y = t.y();
+  r.z = zoom;
+  r.layer = 1;
+
+  qDebug() << "[dem] request z" << zoom << "tile(" << t.x() << "," << t.y()
+           << ") ground" << metersPerTile << "m";
+
+  downloader_->DownloadTiles(
+      QVector<TileRequest>{r},
+      [this, metersPerTile](const TileRequest& tr, const QByteArray& data,
+                            const QString& err) {
+        if (data.isEmpty()) {
+          qWarning() << "[dem] empty:" << err << tr.url.toString();
+          return;
+        }
+        qDebug() << "[dem] bytes:" << data.size();
+        DemDecode d = DecodeTerrarium(data);
+        if (!d.ok) {
+          qWarning() << "[dem] decode failed";
+          return;
+        }
+        qDebug() << "[dem]" << d.w << "x" << d.hgt << "min" << d.minH << "max"
+                 << d.maxH << "relief" << (d.maxH - d.minH) << "m";
+
+        renderer_->SetHeightGrid(d.h, d.w, d.hgt, metersPerTile, metersPerTile);
+        renderer_->SetVerticalExaggeration(2.0);
+        renderer_->SetMeshStep(1);
+        renderer_->SetPointSize(4.0f);
+
+        emit SignalReady();
+      },
+      []() { qDebug() << "[dem] group done"; });
 }

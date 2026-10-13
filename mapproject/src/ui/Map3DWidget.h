@@ -20,6 +20,10 @@ class Map3DWidget : public QWidget {
 
   void UpdateMap3dShowType(Map3DShowType type);
 
+  void Build3DFromDemTile(double centerLat, double centerLon, int zoom = 12);
+
+  void SetDemExaggeration(double k);  // 手动调垂直夸张
+
  signals:
   void SignalReady();
   void Failed(const QString& reason);
@@ -32,4 +36,7 @@ class Map3DWidget : public QWidget {
   MeshBuilder* meshBuilder_;
 
   Map3DShowType type_ = kMap3DShowTypePoint;
+
+  // DEMO
+  void Show3DImageDemo();
 };

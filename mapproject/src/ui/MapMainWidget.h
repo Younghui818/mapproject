@@ -4,6 +4,7 @@
 #include <QCheckBox>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QSlider>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -26,6 +27,7 @@ class MapMainWidget : public QWidget {
   void SlotOnPathRemoved(quint64 id);
   void SlotOnEnter3DClicked();
   void SlotUpdate3DMapShow();
+  void SlotUpdate3dHeightScal(int scal);
 
  private:
   void InitUI();
@@ -47,6 +49,7 @@ class MapMainWidget : public QWidget {
   QRadioButton* btn_show_point_ = nullptr;    // 点云显示地形
   QRadioButton* btn_show_mesh_ = nullptr;     // 网格显示地形
   QRadioButton* btn_show_texture_ = nullptr;  // 贴图显示地形
+  QSlider* slider_3d_height_scal_ = nullptr;  // 3d显示高度对比因子
 
   QCheckBox* cbx_mouse_add_point_ = nullptr;   // 开始创建路径
   QPushButton* btn_clear_all_path_ = nullptr;  // 清除所有路径
