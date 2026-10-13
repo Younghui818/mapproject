@@ -2,6 +2,9 @@
 
 #include <QVBoxLayout>
 #include <QtMath>
+#include <cmath>
+#include <random>
+#include <vector>
 
 #include "DemProcessor.h"
 #include "MeshBuilder.h"
@@ -23,6 +26,52 @@ static QPoint LonLatToTileXY(double lat, double lon, int zoom) {
   return QPoint(x, y);
 }
 
+namespace {
+// 多峰高斯 + 平滑噪声，生成有真实起伏的 demo 高程图
+QImage MakeDemoTerrain(int size = 256) {
+  const int nL = 16;  // 低频噪声网格
+  std::vector<float> grid((nL + 1) * (nL + 1));
+  std::mt19937 rng(20240610);
+  std::uniform_real_distribution<float> d(0.0f, 1.0f);
+  for (auto& v : grid) v = d(rng);
+
+  auto noise = [&](float u, float v) {
+    const float fx = u * nL, fy = v * nL;
+    int x0 = std::min(int(fx), nL - 1), y0 = std::min(int(fy), nL - 1);
+    float tx = fx - x0, ty = fy - y0;
+    tx = tx * tx * (3 - 2 * tx);
+    ty = ty * ty * (3 - 2 * ty);  // smoothstep
+    const auto at = [&](int x, int y) { return grid[y * (nL + 1) + x]; };
+    const float a = at(x0, y0), b = at(x0 + 1, y0);
+    const float c = at(x0, y0 + 1), e = at(x0 + 1, y0 + 1);
+    return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + e * tx) * ty;
+  };
+
+  struct Peak {
+    float cx, cy, r, amp;
+  };
+  const Peak peaks[] = {{0.30f, 0.32f, 0.22f, 0.85f},
+                        {0.68f, 0.25f, 0.16f, 0.60f},
+                        {0.55f, 0.70f, 0.26f, 0.95f},
+                        {0.18f, 0.78f, 0.14f, 0.45f}};
+
+  QImage img(size, size, QImage::Format_Grayscale8);
+  for (int y = 0; y < size; ++y) {
+    uchar* line = img.scanLine(y);
+    for (int x = 0; x < size; ++x) {
+      const float u = float(x) / (size - 1), v = float(y) / (size - 1);
+      float hgt = noise(u, v) * 0.30f;
+      for (const auto& p : peaks) {
+        const float dx = u - p.cx, dy = v - p.cy;
+        hgt += p.amp * std::exp(-((dx * dx + dy * dy) / (p.r * p.r)) * 2.2f);
+      }
+      line[x] = static_cast<uchar>(std::clamp(hgt, 0.0f, 1.0f) * 255.0f);
+    }
+  }
+  return img;
+}
+}  // namespace
+
 Map3DWidget::Map3DWidget(QWidget* parent)
     : QWidget(parent),
       renderer_(new Scene3DRenderer(this)),
@@ -39,14 +88,11 @@ Map3DWidget::~Map3DWidget() = default;
 
 void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
                                     double radiusMeters) {
-  QImage img(256, 256, QImage::Format_Grayscale8);
-  for (int y = 0; y < 256; ++y) {
-    uchar* line = img.scanLine(y);
-    for (int x = 0; x < 256; ++x) line[x] = static_cast<uchar>((x + y) / 2);
-  }
-
-  renderer_->SetPointSize(6.0f);
-  renderer_->SetHeightData(img, 100.0, 100.0, 100.0);  // 喂数据，默认点云
+  renderer_->SetPointSize(5.0f);
+  renderer_->SetMeshStep(2);  // 128×128 网格
+  renderer_->SetHeightData(MakeDemoTerrain(256),
+                           /*width=*/200.0, /*depth=*/200.0,
+                           /*maxHeight=*/45.0);
 
   return;
 

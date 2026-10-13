@@ -25,6 +25,42 @@ QVector3D heightRamp(float t) {
   return QVector3D(c.redF(), c.greenF(), c.blueF());
 }
 
+// 地形配色（高程分层设色）：深谷绿 → 草黄 → 土褐 → 岩石灰 → 雪白
+QVector3D terrainColor(float t) {
+  t = std::clamp(t, 0.0f, 1.0f);
+  struct Stop {
+    float p, r, g, b;
+  };
+  static const Stop kStops[] = {
+      {0.00f, 0.16f, 0.35f, 0.20f}, {0.25f, 0.27f, 0.51f, 0.24f},
+      {0.45f, 0.59f, 0.67f, 0.35f}, {0.65f, 0.67f, 0.55f, 0.39f},
+      {0.85f, 0.51f, 0.45f, 0.41f}, {1.00f, 0.96f, 0.98f, 1.00f}};
+  for (int i = 0; i < 5; ++i) {
+    if (t <= kStops[i + 1].p) {
+      const float k = (t - kStops[i].p) / (kStops[i + 1].p - kStops[i].p);
+      return QVector3D(kStops[i].r + (kStops[i + 1].r - kStops[i].r) * k,
+                       kStops[i].g + (kStops[i + 1].g - kStops[i].g) * k,
+                       kStops[i].b + (kStops[i + 1].b - kStops[i].b) * k);
+    }
+  }
+  return QVector3D(kStops[5].r, kStops[5].g, kStops[5].b);
+}
+
+// 从高度图用中心差分求法线（点云没有法线，用这个补）
+QVector3D normalFromHeight(const QImage& img, int c, int r, int s, float dx,
+                           float dz, float maxH) {
+  const int cols = img.width(), rows = img.height();
+  const int cm = std::max(0, c - s), cp = std::min(cols - 1, c + s);
+  const int rm = std::max(0, r - s), rp = std::min(rows - 1, r + s);
+  const float hL = qGray(img.pixel(cm, r)) / 255.0f * maxH;
+  const float hR = qGray(img.pixel(cp, r)) / 255.0f * maxH;
+  const float hD = qGray(img.pixel(c, rm)) / 255.0f * maxH;
+  const float hU = qGray(img.pixel(c, rp)) / 255.0f * maxH;
+  const float gx = (hR - hL) / std::max(1e-6f, float(cp - cm) * dx);
+  const float gz = (hU - hD) / std::max(1e-6f, float(rp - rm) * dz);
+  return QVector3D(-gx, 1.0f, -gz).normalized();
+}
+
 Qt3DCore::QAttribute* makeVertexAttr(Qt3DCore::QNode* parent,
                                      Qt3DCore::QBuffer* buf,
                                      const QString& name, uint vertexSize,
@@ -210,7 +246,19 @@ void Scene3DRenderer::SetPointCloud(const QImage& heightMap, double width,
       const float x = static_cast<float>(c) / (cols - 1) * width - width / 2.0;
       const float z = static_cast<float>(r) / (rows - 1) * depth - depth / 2.0;
       pts.emplace_back(x, h, z);
-      clr.push_back(heightRamp(maxHeight > 0 ? h / maxHeight : 0.0f));
+
+      const float t =
+          (maxHeight > 0) ? h / static_cast<float>(maxHeight) : 0.0f;
+      QVector3D col = terrainColor(t);
+      if (hillshade_) {
+        const float dx = static_cast<float>(width / (cols - 1));
+        const float dz = static_cast<float>(depth / (rows - 1));
+        col = shade(col, normalFromHeight(heightMap, c, r, step, dx, dz,
+                                          static_cast<float>(maxHeight)));
+      }
+      clr.push_back(col);
+
+      // clr.push_back(heightRamp(maxHeight > 0 ? h / maxHeight : 0.0f));
     }
   }
   SetPointCloud(pts, clr);
@@ -319,8 +367,11 @@ void Scene3DRenderer::SetHeightMesh(const QImage& heightMap, double width,
       const float z = static_cast<float>(rr) / (sr - 1) * depth - depth / 2.0;
       const int i = rr * sc + cc;
       pos[i] = QVector3D(x, h, z);
-      clr[i] =
-          heightRamp(maxHeight > 0 ? h / static_cast<float>(maxHeight) : 0.0f);
+      clr[i] = terrainColor(maxHeight > 0 ? h / static_cast<float>(maxHeight)
+                                          : 0.0f);
+      // clr[i] =
+      //     heightRamp(maxHeight > 0 ? h / static_cast<float>(maxHeight) :
+      //     0.0f);
     }
   }
 
@@ -362,6 +413,9 @@ void Scene3DRenderer::SetHeightMesh(const QImage& heightMap, double width,
       }
     }
     for (auto& v : nrm) v.normalize();
+    if (hillshade_) {
+      for (int i = 0; i < n; ++i) clr[i] = shade(clr[i], nrm[i]);
+    }
   }
 
   // 3. Buffer
@@ -433,4 +487,28 @@ void Scene3DRenderer::SetHeightMesh(const QImage& heightMap, double width,
   frameCamera(width, depth, maxHeight);
   qDebug() << "--- Mesh --- verts:" << n << "indices:" << idx.size()
            << "wireframe:" << wireframe;
+}
+
+void Scene3DRenderer::SetHillshade(bool on) {
+  if (hillshade_ == on) return;
+  hillshade_ = on;
+  rebuild();
+}
+
+void Scene3DRenderer::SetShadeLight(float x, float y, float z) {
+  lightDir_ = QVector3D(x, y, z).normalized();
+  rebuild();
+}
+
+void Scene3DRenderer::SetAmbient(float v) {
+  ambient_ = std::clamp(v, 0.0f, 1.0f);
+  rebuild();
+}
+
+QVector3D Scene3DRenderer::shade(const QVector3D& base,
+                                 const QVector3D& n) const {
+  const float lambert = std::max(0.0f, QVector3D::dotProduct(n, lightDir_));
+  const float k = ambient_ + (1.0f - ambient_) * lambert;
+  return QVector3D(std::min(1.0f, base.x() * k), std::min(1.0f, base.y() * k),
+                   std::min(1.0f, base.z() * k));
 }

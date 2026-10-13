@@ -56,6 +56,11 @@ class Scene3DRenderer : public QWidget {
   void frameCamera(double width, double depth, double maxHeight);
   void applyPointSize();  // 把 pointSize_ 同步到已注入的 QPointSize
 
+  void SetHillshade(bool on);                     // 光照烘焙开关
+  void SetShadeLight(float x, float y, float z);  // 光照方向
+  void SetAmbient(float v);                       // 环境光比例 0~1
+  QVector3D shade(const QVector3D& base, const QVector3D& n) const;
+
   Qt3DExtras::Qt3DWindow* view_ = nullptr;
   QWidget* container_ = nullptr;
   Qt3DCore::QEntity* rootEntity_ = nullptr;
@@ -79,4 +84,8 @@ class Scene3DRenderer : public QWidget {
   int pointStep_ = 2;
   int meshStep_ = 4;
   bool wireframe_ = false;
+
+  bool hillshade_ = true;
+  QVector3D lightDir_ = QVector3D(0.45f, 0.78f, 0.44f).normalized();
+  float ambient_ = 0.35f;
 };
