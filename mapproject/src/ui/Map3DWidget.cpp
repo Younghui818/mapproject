@@ -39,6 +39,19 @@ Map3DWidget::~Map3DWidget() = default;
 
 void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
                                     double radiusMeters) {
+  QImage testImg(256, 256, QImage::Format_Grayscale8);
+  for (int y = 0; y < 256; ++y) {
+    uchar* line = testImg.scanLine(y);
+    // 改成 /2：避免 (x+y)%256 在 255→0 处突变产生断层锯齿
+    for (int x = 0; x < 256; ++x) line[x] = static_cast<uchar>((x + y) / 2);
+  }
+
+  renderer_->SetPointSize(6.0f);  // 先大一点，看清点阵
+  renderer_->SetPointCloud(testImg, 100.0, 100.0, 100.0,
+                           2);  // 128×128 = 16384 点
+
+  return;
+
   // 1) 选择 zoom
   int imgZ = ChooseImageZoom(radiusMeters);
   int demZ = ChooseDemZoom(radiusMeters);
@@ -157,8 +170,17 @@ void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
         dem_->DecodeAndResample(demData, shared->dx1 - shared->dx0 + 1,
                                 shared->dy1 - shared->dy0 + 1, 256, 100.0);
 
-    MeshData mesh = meshBuilder_->BuildMesh(grid, tex, 100.0);
-    renderer_->SetMesh(mesh);
+    QImage heightMap(grid.width, grid.height, QImage::Format_Grayscale8);
+    float maxH = 100.0f;
+    for (int y = 0; y < grid.height; ++y) {
+      for (int x = 0; x < grid.width; ++x) {
+        float h = grid.heights[y * grid.width + x];
+        uchar val = static_cast<uchar>(qBound(0.0f, h / maxH * 255.0f, 255.0f));
+        heightMap.setPixel(x, y, qRgb(val, val, val));
+      }
+    }
+
+    // renderer_->SetHeightMap(heightMap, 100.0, 100.0, 100.0);
     emit SignalReady();
   };
 

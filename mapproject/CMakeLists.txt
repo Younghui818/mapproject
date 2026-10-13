@@ -16,7 +16,7 @@ if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
 endif()
 
 # ================= 查找并配置 QT (全局设置) =================
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Concurrent Network Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Concurrent Network Multimedia 3DCore 3DRender 3DInput 3DExtras)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC OFF)

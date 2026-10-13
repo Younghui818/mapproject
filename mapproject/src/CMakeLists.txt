@@ -13,6 +13,17 @@ add_executable(MapStudio
     ${RESOURCES}
 )
 
+set_target_properties(MapStudio PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY          "${CMAKE_BINARY_DIR}/MapStudio"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG    "${CMAKE_BINARY_DIR}/MapStudio/Debug"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE  "${CMAKE_BINARY_DIR}/MapStudio/Release"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/MapStudio/RelWithDebInfo"
+    PDB_OUTPUT_DIRECTORY              "${CMAKE_BINARY_DIR}/MapStudio"
+    PDB_OUTPUT_DIRECTORY_DEBUG        "${CMAKE_BINARY_DIR}/MapStudio/Debug"
+    PDB_OUTPUT_DIRECTORY_RELEASE      "${CMAKE_BINARY_DIR}/MapStudio/Release"
+    PDB_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/MapStudio/RelWithDebInfo"
+)
+
 # 包含目录 (使用 CMAKE_SOURCE_DIR 确保跨层级路径正确)
 target_include_directories(MapStudio PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -29,6 +40,10 @@ target_link_libraries(MapStudio PRIVATE
     Qt6::Concurrent
     Qt6::Network
     Qt6::Multimedia
+    Qt6::3DCore
+    Qt6::3DRender
+    Qt6::3DInput
+    Qt6::3DExtras
 )
 
 # 源码分组显示
@@ -43,17 +58,3 @@ if(MSVC)
 endif()
 
 # ========== 自动部署 Qt DLL (替代 copy_directory) ==========
-if(WIN32)
-    find_package(Qt6 REQUIRED COMPONENTS Core) # 确保找到 windeployqt
-    get_target_property(_qmake_executable Qt6::qmake IMPORTED_LOCATION)
-    get_filename_component(_qt_bin_dir "${_qmake_executable}" DIRECTORY)
-    
-    add_custom_command(TARGET MapStudio POST_BUILD
-        COMMAND "${_qt_bin_dir}/windeployqt"
-                --no-translations 
-                --no-opengl-sw
-                --no-compiler-runtime
-                "$<TARGET_FILE_DIR:MapStudio>/$<TARGET_FILE_NAME:MapStudio>"
-        COMMENT "Deploying Qt DLLs to executable directory..."
-    )
-endif()
