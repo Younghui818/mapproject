@@ -1,6 +1,7 @@
 #include "Map3DWidget.h"
 
 #include <QMap>
+#include <QPainter>
 #include <QPair>
 #include <QSharedPointer>
 #include <QVBoxLayout>
@@ -23,6 +24,44 @@ constexpr int kHardMaxTiles = 100;       // 绝对硬上限，防异常
 constexpr int kTargetGridMax = 1024;     // 拼接后超过此分辨率就重采样
 constexpr int kMaxMeshVerts = 400000;    // 网格顶点上限
 constexpr int kMaxCloudPoints = 250000;  // 点云点数上限
+
+const QString kTiandituKey = "4e17baf1ebcefc505f3121c67950cd71";
+
+QString TdtImgUrl(int z, int x, int y) {
+  return QString(
+             "https://t0.tianditu.gov.cn/img_w/wmts"
+             "?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
+             "&LAYER=img&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles"
+             "&TILEMATRIX=%1&TILEROW=%2&TILECOL=%3&tk=%4")
+      .arg(z + 0)
+      .arg(y)
+      .arg(x)
+      .arg(kTiandituKey);
+}
+
+QImage StitchImagery(const QMap<QPair<int, int>, QByteArray>& tiles, int x0,
+                     int y0, int x1, int y1) {
+  const int nx = x1 - x0 + 1, ny = y1 - y0 + 1;
+  QImage out(nx * 256, ny * 256, QImage::Format_RGB32);
+  out.fill(Qt::darkGray);  // 缺瓦片填深灰，一眼能看出哪块没下到
+
+  int ok = 0;
+  QPainter p(&out);
+  for (int ty = y0; ty <= y1; ++ty) {
+    for (int tx = x0; tx <= x1; ++tx) {
+      QImage img;
+      if (!img.loadFromData(tiles.value(qMakePair(tx, ty)))) continue;
+      p.drawImage((tx - x0) * 256, (ty - y0) * 256,
+                  img.convertToFormat(QImage::Format_RGB32)
+                      .scaled(256, 256, Qt::IgnoreAspectRatio,
+                              Qt::SmoothTransformation));
+      ok++;
+    }
+  }
+  qDebug() << "[img] stitched" << out.width() << "x" << out.height() << "ok"
+           << ok << "/" << (nx * ny);
+  return ok > 0 ? out : QImage();
+}
 
 // 双线性重采样（高程数据用双线性比最邻近平滑，不会出现台阶）
 void ResampleGrid(const std::vector<float>& src, int sc, int sr,
@@ -279,7 +318,7 @@ Map3DWidget::~Map3DWidget() = default;
 
 void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
                                     double radiusMeters) {
-  constexpr bool kAlsoFetchImagery = false;  // 贴图阶段再打开
+  constexpr bool kAlsoFetchImagery = true;  // 贴图阶段再打开
 
   int nx = 1, ny = 1;
   const int demZ = ChooseDemZoom(radiusMeters, centerLat, centerLon, &nx, &ny);
@@ -395,7 +434,41 @@ void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
       });
 
   if constexpr (kAlsoFetchImagery) {
-    // TODO: 影像瓦片下载（贴图阶段启用），沿用同样的拼接思路
+    auto imgShared =
+        QSharedPointer<QMap<QPair<int, int>, QByteArray>>::create();
+
+    QVector<TileRequest> imgReqs;
+    for (int ty = dy0; ty <= dy1; ++ty)
+      for (int tx = dx0; tx <= dx1; ++tx) {  // ★ 与 DEM 完全相同的瓦片集合
+        TileRequest r;
+        r.x = tx;
+        r.y = ty;
+        r.z = demZ;
+        r.layer = 0;
+        r.url = QUrl(TdtImgUrl(demZ, tx, ty));
+        imgReqs.append(r);
+      }
+
+    downloader_->DownloadTiles(
+        imgReqs,
+        [imgShared](const TileRequest& tr, const QByteArray& data,
+                    const QString& err) {
+          if (data.isEmpty()) {
+            qWarning() << "[img] fail" << tr.x << tr.y << err;
+            return;
+          }
+          imgShared->insert(qMakePair(tr.x, tr.y), data);
+        },
+        [this, imgShared, dx0, dy0, dx1, dy1]() {
+          QImage tex = StitchImagery(*imgShared, dx0, dy0, dx1, dy1);
+          if (tex.isNull()) {
+            qWarning() << "[img] no imagery";
+            return;
+          }
+          renderer_->SetTerrainTexture(tex);
+          qDebug() << "[img] texture applied" << tex.width() << "x"
+                   << tex.height();
+        });
   }
 }
 

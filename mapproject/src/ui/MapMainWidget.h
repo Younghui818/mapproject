@@ -48,7 +48,6 @@ class MapMainWidget : public QWidget {
   QWidget* widget_3d_map_show_ = nullptr;     // 3d模式下地图样式显示窗口
   QRadioButton* btn_show_point_ = nullptr;    // 点云显示地形
   QRadioButton* btn_show_mesh_ = nullptr;     // 网格显示地形
-  QRadioButton* btn_show_texture_ = nullptr;  // 贴图显示地形
   QSlider* slider_3d_height_scal_ = nullptr;  // 3d显示高度对比因子
   QLabel* edit_3d_height_scal_ = nullptr;
 

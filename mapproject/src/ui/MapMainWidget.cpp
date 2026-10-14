@@ -77,10 +77,8 @@ void MapMainWidget::InitUI() {
   widget_3d_show_type_layout->setContentsMargins(5, 5, 5, 5);
   btn_show_point_ = new QRadioButton("point", this);
   btn_show_mesh_ = new QRadioButton("mesh", this);
-  btn_show_texture_ = new QRadioButton("texture", this);
   widget_3d_show_type_layout->addWidget(btn_show_point_);
   widget_3d_show_type_layout->addWidget(btn_show_mesh_);
-  widget_3d_show_type_layout->addWidget(btn_show_texture_);
   widget_3d_map_show_layout->addWidget(widget_3d_show_type);
 
   QWidget* widget_3d_height_scal = new QWidget(widget_3d_map_show_);
@@ -161,8 +159,6 @@ void MapMainWidget::SignalsLink() {
   connect(btn_show_point_, &QRadioButton::clicked, this,
           &MapMainWidget::SlotUpdate3DMapShow);
   connect(btn_show_mesh_, &QRadioButton::clicked, this,
-          &MapMainWidget::SlotUpdate3DMapShow);
-  connect(btn_show_texture_, &QRadioButton::clicked, this,
           &MapMainWidget::SlotUpdate3DMapShow);
   connect(slider_3d_height_scal_, &QSlider::valueChanged, this,
           &MapMainWidget::SlotUpdate3dHeightScal);

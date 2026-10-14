@@ -1,14 +1,19 @@
 #pragma once
 
+#include <QEvent>
 #include <QImage>
+#include <QPoint>
+#include <QVector2D>
 #include <QVector3D>
 #include <QVector>
 #include <QWidget>
 #include <Qt3DCore/QEntity>
 #include <Qt3DExtras/QOrbitCameraController>
+#include <Qt3DExtras/QTextureMaterial>
 #include <Qt3DExtras/Qt3DWindow>
 #include <Qt3DRender/QCamera>
 #include <Qt3DRender/QPointSize>
+#include <Qt3DRender/QTexture>
 #include <vector>
 
 #include "MeshBuilder.h"
@@ -23,7 +28,6 @@ class Scene3DRenderer : public QWidget {
   Q_OBJECT
  public:
   explicit Scene3DRenderer(QWidget* parent = nullptr);
-  void SetMesh(const MeshData& mesh);
 
   // ---- 数据入口 ----
   void SetHeightData(const QImage& heightMap, double width, double depth,
@@ -48,6 +52,13 @@ class Scene3DRenderer : public QWidget {
   double HeightMax() const { return heightMax_; }
   void ClearAll();
 
+  void SetTerrainTexture(const QImage& image);
+  void ClearTerrainTexture();
+  void SetTextureFlipV(bool flip);  // 纹理上下颠倒时切换
+
+ protected:
+  bool eventFilter(QObject* obj, QEvent* ev) override;
+
  signals:
   void ClickedAt(double x, double y, double z);
 
@@ -59,6 +70,9 @@ class Scene3DRenderer : public QWidget {
   void applyPointSize();
   void makeEntity(Qt3DCore::QEntity*& ent, const void* geo, bool asPoints,
                   bool wireframe);
+  void updateClipPlanes();  // 把 frameCamera 里的 near/far 计算抽出来
+  void SetZoomSensitivity(float f) { zoomFactor_ = f; }
+  void doPan(const QPoint& delta);  // 按比例平移
 
   Qt3DExtras::Qt3DWindow* view_ = nullptr;
   QWidget* container_ = nullptr;
@@ -86,4 +100,16 @@ class Scene3DRenderer : public QWidget {
   bool hillshade_ = true;
   QVector3D lightDir_ = QVector3D(0.45f, 0.78f, 0.44f).normalized();
   float ambient_ = 0.35f;
+
+  bool useTexture_ = false;
+  bool flipV_ = true;
+  QImage terrainImage_;
+
+  bool customZoom_ = true;
+  float zoomFactor_ = 0.15f;  // 每格滚轮缩放 15%
+  float minDistance_ = 1.0f;
+
+  bool panning_ = false;
+  QPoint lastMousePos_;
+  float panFactor_ = 1.2f;  // 拖过一屏高度 ≈ 移动 1.2 倍相机距离
 };
