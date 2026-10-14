@@ -83,10 +83,23 @@ void MapMainWidget::InitUI() {
   widget_3d_show_type_layout->addWidget(btn_show_texture_);
   widget_3d_map_show_layout->addWidget(widget_3d_show_type);
 
+  QWidget* widget_3d_height_scal = new QWidget(widget_3d_map_show_);
+  QHBoxLayout* widget_3d_height_scal_layout =
+      new QHBoxLayout(widget_3d_height_scal);
+  widget_3d_height_scal_layout->setContentsMargins(5, 5, 5, 5);
   slider_3d_height_scal_ =
       new QSlider(Qt::Orientation::Horizontal, widget_3d_map_show_);
   slider_3d_height_scal_->setRange(0, 300);
-  widget_3d_map_show_layout->addWidget(slider_3d_height_scal_);
+  slider_3d_height_scal_->setValue(30);
+  QLabel* label_3d_height_scal =
+      new QLabel("height scale", widget_3d_map_show_);
+  widget_3d_height_scal_layout->addWidget(label_3d_height_scal);
+  widget_3d_height_scal_layout->addWidget(slider_3d_height_scal_);
+  edit_3d_height_scal_ = new QLabel(widget_3d_map_show_);
+  edit_3d_height_scal_->setText("3");
+  widget_3d_height_scal_layout->addWidget(edit_3d_height_scal_);
+
+  widget_3d_map_show_layout->addWidget(widget_3d_height_scal);
 
   operation_layout->addWidget(widget_3d_map_show_);
   widget_3d_map_show_->hide();
@@ -274,5 +287,6 @@ void MapMainWidget::SlotUpdate3DMapShow() {
 void MapMainWidget::SlotUpdate3dHeightScal(int scal) {
   if (w3d_widget_) {
     w3d_widget_->SetDemExaggeration(scal / 10);
+    edit_3d_height_scal_->setText(QString::number(scal / 10.0, 'f', 1));
   }
 }

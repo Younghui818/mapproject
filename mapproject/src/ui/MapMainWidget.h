@@ -50,6 +50,7 @@ class MapMainWidget : public QWidget {
   QRadioButton* btn_show_mesh_ = nullptr;     // 网格显示地形
   QRadioButton* btn_show_texture_ = nullptr;  // 贴图显示地形
   QSlider* slider_3d_height_scal_ = nullptr;  // 3d显示高度对比因子
+  QLabel* edit_3d_height_scal_ = nullptr;
 
   QCheckBox* cbx_mouse_add_point_ = nullptr;   // 开始创建路径
   QPushButton* btn_clear_all_path_ = nullptr;  // 清除所有路径
