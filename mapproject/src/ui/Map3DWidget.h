@@ -24,6 +24,17 @@ class Map3DWidget : public QWidget {
 
   void SetDemExaggeration(double k);  // 手动调垂直夸张
 
+  // 新增：直接吃 zoom + 视口，内部自己算半径
+  void Build3DFromView(double centerLat, double centerLon,
+                       double metersPerPixel, int viewportW, int viewportH);
+
+  void SetAmbient(float v);
+  void SetLightAzimuth(float deg);
+  void SetLightElevation(float deg);
+  void SetBrightness(float v);
+  void SetContrast(float v);
+  void ApplyLightPreset(int idx);
+
  signals:
   void SignalReady();
   void Failed(const QString& reason);

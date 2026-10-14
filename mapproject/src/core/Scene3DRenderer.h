@@ -12,6 +12,7 @@
 #include <Qt3DExtras/QTextureMaterial>
 #include <Qt3DExtras/Qt3DWindow>
 #include <Qt3DRender/QCamera>
+#include <Qt3DRender/QPaintedTextureImage>
 #include <Qt3DRender/QPointSize>
 #include <Qt3DRender/QTexture>
 #include <vector>
@@ -23,6 +24,8 @@ enum Map3DShowType {
   kMap3DShowTypeMesh,       // 网格
   kMap3DShowTypeTexture     // 贴图（预留）
 };
+
+class MemoryTextureImage;
 
 class Scene3DRenderer : public QWidget {
   Q_OBJECT
@@ -45,7 +48,6 @@ class Scene3DRenderer : public QWidget {
   void SetWireframe(bool on);
   void SetHillshade(bool on);
   void SetShadeLight(float x, float y, float z);
-  void SetAmbient(float v);
   void SetVerticalExaggeration(double k);
 
   double HeightMin() const { return heightMin_; }
@@ -55,6 +57,20 @@ class Scene3DRenderer : public QWidget {
   void SetTerrainTexture(const QImage& image);
   void ClearTerrainTexture();
   void SetTextureFlipV(bool flip);  // 纹理上下颠倒时切换
+
+  // 光照
+  void SetAmbient(float v);           // 环境光 0~1，越大越亮、越平
+  void SetLightAzimuth(float deg);    // 方位角 0~360（太阳的罗盘方向）
+  void SetLightElevation(float deg);  // 高度角 0~90（越高越接近正午）
+
+  // 亮度/对比度（不改几何，只改颜色）
+  void SetBrightness(float v);  // 1.0 = 原始，>1 变亮
+  void SetContrast(float v);    // 1.0 = 原始，>1 对比更强
+
+  // 预设
+  void ApplyLightPreset(int idx);  // 0=默认 1=明亮 2=强立体 3=柔和
+
+  QVector3D applyBrightnessContrast(const QVector3D& c) const;
 
  protected:
   bool eventFilter(QObject* obj, QEvent* ev) override;
@@ -73,6 +89,10 @@ class Scene3DRenderer : public QWidget {
   void updateClipPlanes();  // 把 frameCamera 里的 near/far 计算抽出来
   void SetZoomSensitivity(float f) { zoomFactor_ = f; }
   void doPan(const QPoint& delta);  // 按比例平移
+
+  void refreshColors();  // ★ 只重算并覆写颜色 buffer
+  QVector3D lightDirFromAngles() const;
+  QImage applyImageAdjust(const QImage& src) const;
 
   Qt3DExtras::Qt3DWindow* view_ = nullptr;
   QWidget* container_ = nullptr;
@@ -102,7 +122,7 @@ class Scene3DRenderer : public QWidget {
   float ambient_ = 0.35f;
 
   bool useTexture_ = false;
-  bool flipV_ = true;
+  bool flipV_ = false;
   QImage terrainImage_;
 
   bool customZoom_ = true;
@@ -112,4 +132,11 @@ class Scene3DRenderer : public QWidget {
   bool panning_ = false;
   QPoint lastMousePos_;
   float panFactor_ = 1.2f;  // 拖过一屏高度 ≈ 移动 1.2 倍相机距离
+
+  float azimuth_ = 315.0f;  // 默认西北方向打光（制图标西准）
+  float elevation_ = 45.0f;
+  float brightness_ = 1.0f;
+  float contrast_ = 1.0f;
+
+  MemoryTextureImage* terrainTexImage_ = nullptr;
 };

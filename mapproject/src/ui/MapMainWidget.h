@@ -2,6 +2,7 @@
 #define MAP_MAIN_WIDGET_H_
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSlider>
@@ -50,6 +51,17 @@ class MapMainWidget : public QWidget {
   QRadioButton* btn_show_mesh_ = nullptr;     // 网格显示地形
   QSlider* slider_3d_height_scal_ = nullptr;  // 3d显示高度对比因子
   QLabel* edit_3d_height_scal_ = nullptr;
+
+  QWidget* widget_combo_preset_light_ = nullptr;
+  QWidget* widget_sliderAmbient_ = nullptr;
+  QWidget* widget_sliderAzimuth_ = nullptr;
+  QWidget* widget_sliderElev_ = nullptr;
+  QWidget* widget_sliderBright_ = nullptr;
+  QComboBox* combo_preset_light_ = nullptr;
+  QSlider* sliderAmbient_ = nullptr;  // 环境光：0~100 → 0.0~1.0
+  QSlider* sliderAzimuth_ = nullptr;  // 方位角：0~359
+  QSlider* sliderElev_ = nullptr;     // 高度角：5~89
+  QSlider* sliderBright_ = nullptr;   // 亮度：20~300 → 0.2~3.0
 
   QCheckBox* cbx_mouse_add_point_ = nullptr;   // 开始创建路径
   QPushButton* btn_clear_all_path_ = nullptr;  // 清除所有路径

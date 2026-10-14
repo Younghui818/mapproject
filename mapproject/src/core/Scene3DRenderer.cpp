@@ -211,13 +211,21 @@ GeoData buildMesh(const std::vector<float>& h, int cols, int rows, double width,
 
   return g;
 }
+}  // namespace
+
+// ============================================================
 
 class MemoryTextureImage : public Qt3DRender::QPaintedTextureImage {
  public:
   explicit MemoryTextureImage(const QImage& img,
                               Qt3DCore::QNode* parent = nullptr)
       : Qt3DRender::QPaintedTextureImage(parent), img_(img) {
-    setSize(img.size());  // 必须先设尺寸，否则纹理不会被上传
+    setSize(img.size());
+  }
+  void setImage(const QImage& img) {
+    img_ = img;
+    setSize(img.size());
+    update();
   }
 
  protected:
@@ -226,8 +234,6 @@ class MemoryTextureImage : public Qt3DRender::QPaintedTextureImage {
  private:
   QImage img_;
 };
-}  // namespace
-
 // ============================================================
 
 Scene3DRenderer::Scene3DRenderer(QWidget* parent) : QWidget(parent) {
@@ -327,6 +333,7 @@ void Scene3DRenderer::rebuild() {
   if (!hasData_ || !rootEntity_) return;
 
   const float minH = float(heightMin_), maxH = float(heightMax_);
+  const QVector3D L = lightDirFromAngles();
 
   if (showType_ == kMap3DShowTypePoint) {
     GeoData g = buildPointCloud(grid_, gridCols_, gridRows_, width_, depth_,
@@ -367,16 +374,6 @@ void Scene3DRenderer::SetWireframe(bool on) {
 void Scene3DRenderer::SetHillshade(bool on) {
   if (hillshade_ == on) return;
   hillshade_ = on;
-  rebuild();
-}
-
-void Scene3DRenderer::SetShadeLight(float x, float y, float z) {
-  lightDir_ = QVector3D(x, y, z).normalized();
-  rebuild();
-}
-
-void Scene3DRenderer::SetAmbient(float v) {
-  ambient_ = std::clamp(v, 0.0f, 1.0f);
   rebuild();
 }
 
@@ -481,8 +478,8 @@ void Scene3DRenderer::makeEntity(Qt3DCore::QEntity*& ent, const void* geoPtr,
 
   if (useTexture_ && !terrainImage_.isNull() && !asPoints) {
     auto* tex = new Qt3DRender::QTexture2D(ent);
-    auto* img =
-        new MemoryTextureImage(terrainImage_, ent);  // 不再用 QTextureImage
+    auto* img = new MemoryTextureImage(terrainImage_, ent);
+    terrainTexImage_ = img;  // ★ 新增
     tex->addTextureImage(img);
     tex->setMinificationFilter(Qt3DRender::QTexture2D::LinearMipMapLinear);
     tex->setMagnificationFilter(Qt3DRender::QTexture2D::Linear);
@@ -530,6 +527,7 @@ void Scene3DRenderer::destroyEntity(Qt3DCore::QEntity*& e) {
 
 void Scene3DRenderer::ClearAll() {
   pointSizeNodes_.clear();
+  terrainTexImage_ = nullptr;  // ★ 新增
   destroyEntity(pointCloudEntity_);
   destroyEntity(meshEntity_);
 }
@@ -660,4 +658,230 @@ void Scene3DRenderer::doPan(const QPoint& delta) {
 
   camera_->setPosition(pos + move);
   camera_->setViewCenter(center + move);
+}
+
+QVector3D Scene3DRenderer::lightDirFromAngles() const {
+  const float az = azimuth_ * float(M_PI) / 180.0f;
+  const float el = std::clamp(elevation_, 5.0f, 89.0f) * float(M_PI) / 180.0f;
+  return QVector3D(std::sin(az) * std::cos(el), std::sin(el),
+                   std::cos(az) * std::cos(el))
+      .normalized();
+}
+
+void Scene3DRenderer::refreshColors() {
+  qDebug() << "[light] refresh: type" << int(showType_) << "useTex"
+           << useTexture_ << "hasTexImg" << (terrainTexImage_ != nullptr)
+           << "amb" << ambient_ << "bri" << brightness_ << "con" << contrast_;
+
+  if (!hasData_ || !rootEntity_) return;
+
+  // ★ 贴图模式：改纹理图，顶点色不参与渲染
+  if (useTexture_ && terrainTexImage_ && showType_ != kMap3DShowTypePoint) {
+    terrainTexImage_->setImage(applyImageAdjust(terrainImage_));
+    qDebug() << "[light] texture adjusted bri" << brightness_ << "con"
+             << contrast_;
+    return;
+  }
+
+  Qt3DCore::QEntity* ent =
+      (showType_ == kMap3DShowTypePoint) ? pointCloudEntity_ : meshEntity_;
+  if (!ent) return;
+
+  // 找到实体的 QGeometryRenderer
+  Qt3DRender::QGeometryRenderer* renderer = nullptr;
+  for (auto* c : ent->components()) {
+    if (auto* r = qobject_cast<Qt3DRender::QGeometryRenderer*>(c)) {
+      renderer = r;
+      break;
+    }
+  }
+  if (!renderer || !renderer->geometry()) return;
+
+  // 找到颜色 attribute 对应的 buffer
+  Qt3DCore::QBuffer* colBuf = nullptr;
+  uint colCount = 0;
+  for (auto* a : renderer->geometry()->attributes()) {
+    if (a->name() == Qt3DCore::QAttribute::defaultColorAttributeName()) {
+      colBuf = a->buffer();
+      colCount = uint(a->count());
+      break;
+    }
+  }
+  if (!colBuf || colCount == 0) return;
+
+  // ---- 重算颜色：与 buildXxx 里的公式保持一致 ----
+  const float minH = float(heightMin_), maxH = float(heightMax_);
+  const float span = std::max(1e-6f, maxH - minH);
+  const QVector3D L = lightDirFromAngles();
+
+  // 判断当前是点云还是网格（点云的采样步长不同）
+  const bool isPoints = (showType_ == kMap3DShowTypePoint);
+  const int step = isPoints ? pointStep_ : meshStep_;
+  const int sc = isPoints ? 0 : std::max(2, gridCols_ / std::max(1, step));
+  const int sr = isPoints ? 0 : std::max(2, gridRows_ / std::max(1, step));
+  const double dx =
+      width_ / std::max(1.0, double(isPoints ? gridCols_ - 1 : sc - 1));
+  const double dz =
+      depth_ / std::max(1.0, double(isPoints ? gridRows_ - 1 : sr - 1));
+
+  QByteArray colData;
+  colData.resize(int(colCount * 3 * sizeof(float)));
+  float* p = reinterpret_cast<float*>(colData.data());
+
+  size_t k = 0;
+  if (isPoints) {
+    for (int r = 0; r < gridRows_ && k < colCount; r += step)
+      for (int c = 0; c < gridCols_ && k < colCount; c += step) {
+        const float hv = at(grid_, gridCols_, gridRows_, c, r);
+        QVector3D col = terrainColor((hv - minH) / span);
+        if (hillshade_)
+          col =
+              shadeColor(col,
+                         gridNormal(grid_, gridCols_, gridRows_, c, r, step,
+                                    float(dx), float(dz), minH, exaggeration_),
+                         L, ambient_);
+        col = applyBrightnessContrast(col);
+        *p++ = col.x();
+        *p++ = col.y();
+        *p++ = col.z();
+        ++k;
+      }
+  } else {
+    // 网格：从 normal buffer 读回已算好的法线
+    Qt3DCore::QBuffer* nrmBuf = nullptr;
+    for (auto* a : renderer->geometry()->attributes()) {
+      if (a->name() == Qt3DCore::QAttribute::defaultNormalAttributeName()) {
+        nrmBuf = a->buffer();
+        break;
+      }
+    }
+    if (!nrmBuf) return;
+
+    const QByteArray nrmData = nrmBuf->data();
+    const float* np = reinterpret_cast<const float*>(nrmData.constData());
+    if (nrmData.size() < int(colCount * 3 * sizeof(float))) return;
+
+    for (uint i = 0; i < colCount; ++i) {
+      // 从 grid_ 取高程决定基础色；索引 i 对应网格顶点 (rr, cc)
+      const int rr = int(i) / sc, cc = int(i) % sc;
+      const int c = std::min(cc * step, gridCols_ - 1);
+      const int r = std::min(rr * step, gridRows_ - 1);
+      const float hv = at(grid_, gridCols_, gridRows_, c, r);
+
+      QVector3D col = terrainColor((hv - minH) / span);
+      QVector3D n(np[i * 3], np[i * 3 + 1], np[i * 3 + 2]);
+      if (hillshade_) col = shadeColor(col, n.normalized(), L, ambient_);
+      col = applyBrightnessContrast(col);
+      *p++ = col.x();
+      *p++ = col.y();
+      *p++ = col.z();
+    }
+  }
+
+  colBuf->setData(colData);
+}
+
+QVector3D Scene3DRenderer::applyBrightnessContrast(const QVector3D& c) const {
+  auto f = [this](float v) {
+    v = (v - 0.5f) * contrast_ + 0.5f;  // 对比度：绕 0.5 拉伸
+    v = v * brightness_;                // 亮度：线性缩放
+    return std::clamp(v, 0.0f, 1.0f);
+  };
+  return QVector3D(f(c.x()), f(c.y()), f(c.z()));
+}
+
+void Scene3DRenderer::SetAmbient(float v) {
+  ambient_ = std::clamp(v, 0.0f, 1.0f);
+  refreshColors();  // ★ 不再 rebuild
+}
+
+void Scene3DRenderer::SetShadeLight(float x, float y, float z) {
+  const QVector3D L = QVector3D(x, y, z).normalized();
+  elevation_ = std::asin(std::clamp(L.y(), -1.0f, 1.0f)) * 180.0f / float(M_PI);
+  azimuth_ = std::atan2(L.x(), L.z()) * 180.0f / float(M_PI);
+  if (azimuth_ < 0) azimuth_ += 360.0f;
+  refreshColors();
+}
+
+void Scene3DRenderer::SetLightAzimuth(float deg) {
+  azimuth_ = std::fmod(deg, 360.0f);
+  if (azimuth_ < 0) azimuth_ += 360.0f;
+  refreshColors();
+}
+
+void Scene3DRenderer::SetLightElevation(float deg) {
+  elevation_ = std::clamp(deg, 5.0f, 89.0f);
+  refreshColors();
+}
+
+void Scene3DRenderer::SetBrightness(float v) {
+  brightness_ = std::clamp(v, 0.2f, 3.0f);
+  refreshColors();
+}
+
+void Scene3DRenderer::SetContrast(float v) {
+  contrast_ = std::clamp(v, 0.2f, 3.0f);
+  refreshColors();
+}
+
+void Scene3DRenderer::ApplyLightPreset(int idx) {
+  switch (idx) {
+    case 1:  // 明亮：适合暗色底图
+      ambient_ = 0.65f;
+      elevation_ = 55.0f;
+      azimuth_ = 315.0f;
+      brightness_ = 1.25f;
+      contrast_ = 0.9f;
+      break;
+    case 2:  // 强立体：起伏明显
+      ambient_ = 0.22f;
+      elevation_ = 32.0f;
+      azimuth_ = 315.0f;
+      brightness_ = 1.1f;
+      contrast_ = 1.3f;
+      break;
+    case 3:  // 柔和：看整体形态
+      ambient_ = 0.5f;
+      elevation_ = 60.0f;
+      azimuth_ = 315.0f;
+      brightness_ = 1.05f;
+      contrast_ = 0.95f;
+      break;
+    default:  // 0 默认
+      ambient_ = 0.35f;
+      elevation_ = 45.0f;
+      azimuth_ = 315.0f;
+      brightness_ = 1.0f;
+      contrast_ = 1.0f;
+      break;
+  }
+  refreshColors();
+  qDebug() << "[light] preset" << idx << "amb" << ambient_ << "el" << elevation_
+           << "bri" << brightness_ << "con" << contrast_;
+}
+
+QImage Scene3DRenderer::applyImageAdjust(const QImage& src) const {
+  if (src.isNull() || (brightness_ == 1.0f && contrast_ == 1.0f)) return src;
+
+  // 用 256 级 LUT 快速映射，避免逐像素浮点运算
+  uchar lut[256];
+  for (int i = 0; i < 256; ++i) {
+    float v = (i / 255.0f - 0.5f) * contrast_ + 0.5f;
+    v *= brightness_;
+    lut[i] = uchar(std::clamp(v, 0.0f, 1.0f) * 255.0f);
+  }
+
+  QImage out = src.convertToFormat(QImage::Format_RGBA8888);
+  const int h = out.height();
+  for (int y = 0; y < h; ++y) {
+    uchar* line = out.scanLine(y);
+    const int w4 = out.width() * 4;
+    for (int x = 0; x < w4; x += 4) {
+      line[x] = lut[line[x]];
+      line[x + 1] = lut[line[x + 1]];
+      line[x + 2] = lut[line[x + 2]];
+      // alpha 不动
+    }
+  }
+  return out;
 }

@@ -39,27 +39,53 @@ QString TdtImgUrl(int z, int x, int y) {
       .arg(kTiandituKey);
 }
 
-QImage StitchImagery(const QMap<QPair<int, int>, QByteArray>& tiles, int x0,
-                     int y0, int x1, int y1) {
-  const int nx = x1 - x0 + 1, ny = y1 - y0 + 1;
-  QImage out(nx * 256, ny * 256, QImage::Format_RGB32);
-  out.fill(Qt::darkGray);  // 缺瓦片填深灰，一眼能看出哪块没下到
+// 影像注记（透明 PNG，叠在影像上层）
+QString TdtCiaUrl(int z, int x, int y) {
+  return QString(
+             "https://t0.tianditu.gov.cn/cia_w/wmts"
+             "?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
+             "&LAYER=cia&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles"
+             "&TILEMATRIX=%1&TILEROW=%2&TILECOL=%3&tk=%4")
+      .arg(z)
+      .arg(y)
+      .arg(x)
+      .arg(kTiandituKey);
+}
 
-  int ok = 0;
+// 影像 + 注记合成。out 必须带 alpha，否则注记透明区会变黑块
+QImage StitchImagery(const QMap<QPair<int, int>, QByteArray>& imgTiles,
+                     const QMap<QPair<int, int>, QByteArray>& ciaTiles, int x0,
+                     int y0, int x1, int y1, bool withLabel) {
+  const int nx = x1 - x0 + 1, ny = y1 - y0 + 1;
+  QImage out(nx * 256, ny * 256, QImage::Format_RGBA8888);
+  out.fill(QColor(70, 70, 75));  // 缺瓦片填深灰，一眼可见
+
   QPainter p(&out);
+  int ok = 0;
   for (int ty = y0; ty <= y1; ++ty) {
     for (int tx = x0; tx <= x1; ++tx) {
-      QImage img;
-      if (!img.loadFromData(tiles.value(qMakePair(tx, ty)))) continue;
-      p.drawImage((tx - x0) * 256, (ty - y0) * 256,
-                  img.convertToFormat(QImage::Format_RGB32)
+      const auto key = qMakePair(tx, ty);
+      QImage base;
+      if (!base.loadFromData(imgTiles.value(key))) continue;
+      const int ox = (tx - x0) * 256, oy = (ty - y0) * 256;
+
+      p.drawImage(ox, oy,
+                  base.convertToFormat(QImage::Format_RGBA8888)
                       .scaled(256, 256, Qt::IgnoreAspectRatio,
                               Qt::SmoothTransformation));
+
+      if (withLabel) {  // QPainter 自动做 alpha 混合
+        QImage lbl;
+        if (lbl.loadFromData(ciaTiles.value(key)))
+          p.drawImage(ox, oy,
+                      lbl.scaled(256, 256, Qt::IgnoreAspectRatio,
+                                 Qt::SmoothTransformation));
+      }
       ok++;
     }
   }
   qDebug() << "[img] stitched" << out.width() << "x" << out.height() << "ok"
-           << ok << "/" << (nx * ny);
+           << ok << "/" << (nx * ny) << "label" << withLabel;
   return ok > 0 ? out : QImage();
 }
 
@@ -302,6 +328,13 @@ static double MercatorRes(double lat, int zoom) {
   return 156543.03392804097 * std::cos(lat * M_PI / 180.0) / double(1 << zoom);
 }
 
+static double VisibleRadiusMeters(double centerLat, int zoom, int viewportW,
+                                  int viewportH, double cover = 1.15) {
+  const double res = MercatorRes(centerLat, zoom);  // 米/像素
+  const double halfMin = std::min(viewportW, viewportH) * 0.5;
+  return std::max(300.0, halfMin * res * cover);  // 下限 300m，防 zoom 过大
+}
+
 Map3DWidget::Map3DWidget(QWidget* parent)
     : QWidget(parent),
       renderer_(new Scene3DRenderer(this)),
@@ -434,12 +467,16 @@ void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
       });
 
   if constexpr (kAlsoFetchImagery) {
+    constexpr bool kWithLabel = true;
     auto imgShared =
         QSharedPointer<QMap<QPair<int, int>, QByteArray>>::create();
+    auto ciaShared =
+        QSharedPointer<QMap<QPair<int, int>, QByteArray>>::create();
 
-    QVector<TileRequest> imgReqs;
+    // 与 DEM 完全相同的瓦片集合（同 zoom、同 x/y 范围）
+    QVector<TileRequest> imgReqs, ciaReqs;
     for (int ty = dy0; ty <= dy1; ++ty)
-      for (int tx = dx0; tx <= dx1; ++tx) {  // ★ 与 DEM 完全相同的瓦片集合
+      for (int tx = dx0; tx <= dx1; ++tx) {
         TileRequest r;
         r.x = tx;
         r.y = ty;
@@ -447,27 +484,46 @@ void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
         r.layer = 0;
         r.url = QUrl(TdtImgUrl(demZ, tx, ty));
         imgReqs.append(r);
+        if constexpr (kWithLabel) {
+          TileRequest c = r;
+          c.url = QUrl(TdtCiaUrl(demZ, tx, ty));
+          ciaReqs.append(c);
+        }
       }
+
+    auto applyTexture = [this, imgShared, ciaShared, dx0, dy0, dx1, dy1]() {
+      QImage tex =
+          StitchImagery(*imgShared, *ciaShared, dx0, dy0, dx1, dy1, kWithLabel);
+      if (tex.isNull()) {
+        qWarning() << "[img] no imagery";
+        return;
+      }
+      renderer_->SetTerrainTexture(tex);
+      qDebug() << "[img] texture applied";
+    };
 
     downloader_->DownloadTiles(
         imgReqs,
-        [imgShared](const TileRequest& tr, const QByteArray& data,
-                    const QString& err) {
-          if (data.isEmpty()) {
-            qWarning() << "[img] fail" << tr.x << tr.y << err;
+        [imgShared](const TileRequest& tr, const QByteArray& d,
+                    const QString& e) {
+          if (d.isEmpty()) {
+            qWarning() << "[img] fail" << tr.x << tr.y << e;
             return;
           }
-          imgShared->insert(qMakePair(tr.x, tr.y), data);
+          imgShared->insert(qMakePair(tr.x, tr.y), d);
         },
-        [this, imgShared, dx0, dy0, dx1, dy1]() {
-          QImage tex = StitchImagery(*imgShared, dx0, dy0, dx1, dy1);
-          if (tex.isNull()) {
-            qWarning() << "[img] no imagery";
+        [this, ciaShared, ciaReqs, applyTexture]() {
+          if (ciaReqs.isEmpty()) {
+            applyTexture();
             return;
           }
-          renderer_->SetTerrainTexture(tex);
-          qDebug() << "[img] texture applied" << tex.width() << "x"
-                   << tex.height();
+          downloader_->DownloadTiles(
+              ciaReqs,
+              [ciaShared](const TileRequest& tr, const QByteArray& d,
+                          const QString&) {
+                if (!d.isEmpty()) ciaShared->insert(qMakePair(tr.x, tr.y), d);
+              },
+              applyTexture);
         });
   }
 }
@@ -538,4 +594,42 @@ void Map3DWidget::Build3DFromDemTile(double centerLat, double centerLon,
         emit SignalReady();
       },
       []() { qDebug() << "[dem] group done"; });
+}
+
+void Map3DWidget::Build3DFromView(double centerLat, double centerLon,
+                                  double metersPerPixel, int viewportW,
+                                  int viewportH) {
+  constexpr double kCover = 1.15;  // 比 2D 视野多抓一圈，边缘不露白
+  const double halfMin = std::min(viewportW, viewportH) * 0.5;
+  const double radius = std::max(300.0, halfMin * metersPerPixel * kCover);
+
+  qDebug() << "[3d-entry] lat" << centerLat << "lon" << centerLon << "mpp"
+           << metersPerPixel << "view" << viewportW << "x" << viewportH
+           << "=> radius" << int(radius) << "m";
+
+  Build3DFromCenter(centerLat, centerLon, radius);
+}
+
+void Map3DWidget::SetAmbient(float v) {
+  if (renderer_) renderer_->SetAmbient(v);
+}
+
+void Map3DWidget::SetLightAzimuth(float deg) {
+  if (renderer_) renderer_->SetLightAzimuth(deg);
+}
+
+void Map3DWidget::SetLightElevation(float deg) {
+  if (renderer_) renderer_->SetLightElevation(deg);
+}
+
+void Map3DWidget::SetBrightness(float v) {
+  if (renderer_) renderer_->SetBrightness(v);
+}
+
+void Map3DWidget::SetContrast(float v) {
+  if (renderer_) renderer_->SetContrast(v);
+}
+
+void Map3DWidget::ApplyLightPreset(int idx) {
+  if (renderer_) renderer_->ApplyLightPreset(idx);
 }

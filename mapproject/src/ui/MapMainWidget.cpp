@@ -99,6 +99,64 @@ void MapMainWidget::InitUI() {
 
   widget_3d_map_show_layout->addWidget(widget_3d_height_scal);
 
+  widget_combo_preset_light_ = new QWidget(widget_3d_map_show_);
+  QHBoxLayout* widget_combo_preset_light_layout =
+      new QHBoxLayout(widget_combo_preset_light_);
+  QLabel* label_combo_preset_light = new QLabel("preset", widget_3d_map_show_);
+  widget_combo_preset_light_layout->addWidget(label_combo_preset_light);
+  combo_preset_light_ = new QComboBox(widget_3d_map_show_);
+  combo_preset_light_->addItem("bright");
+  combo_preset_light_->addItem("strong");
+  combo_preset_light_->addItem("soft");
+  combo_preset_light_->addItem("common");
+  widget_combo_preset_light_layout->addWidget(combo_preset_light_);
+  widget_3d_map_show_layout->addWidget(widget_combo_preset_light_);
+
+  widget_sliderAmbient_ = new QWidget(widget_3d_map_show_);
+  QHBoxLayout* widget_sliderAmbient_layout =
+      new QHBoxLayout(widget_sliderAmbient_);
+  QLabel* label_sliderAmbient = new QLabel("Ambient", widget_3d_map_show_);
+  widget_sliderAmbient_layout->addWidget(label_sliderAmbient);
+  sliderAmbient_ =
+      new QSlider(Qt::Orientation::Horizontal, widget_3d_map_show_);
+  sliderAmbient_->setRange(0, 100);
+  sliderAmbient_->setValue(50);
+  widget_sliderAmbient_layout->addWidget(sliderAmbient_);
+  widget_3d_map_show_layout->addWidget(widget_sliderAmbient_);
+
+  widget_sliderAzimuth_ = new QWidget(widget_3d_map_show_);
+  QHBoxLayout* widget_sliderAzimuth_layout =
+      new QHBoxLayout(widget_sliderAzimuth_);
+  QLabel* label_sliderAzimuth = new QLabel("Azimuth", widget_3d_map_show_);
+  widget_sliderAzimuth_layout->addWidget(label_sliderAzimuth);
+  sliderAzimuth_ =
+      new QSlider(Qt::Orientation::Horizontal, widget_3d_map_show_);
+  sliderAzimuth_->setRange(0, 359);
+  sliderAzimuth_->setValue(90);
+  widget_sliderAzimuth_layout->addWidget(sliderAzimuth_);
+  widget_3d_map_show_layout->addWidget(widget_sliderAzimuth_);
+
+  widget_sliderElev_ = new QWidget(widget_3d_map_show_);
+  QHBoxLayout* widget_sliderElev_layout = new QHBoxLayout(widget_sliderElev_);
+  QLabel* label_sliderElev = new QLabel("Elev", widget_3d_map_show_);
+  widget_sliderElev_layout->addWidget(label_sliderElev);
+  sliderElev_ = new QSlider(Qt::Orientation::Horizontal, widget_3d_map_show_);
+  sliderElev_->setRange(5, 89);
+  sliderElev_->setValue(50);
+  widget_sliderElev_layout->addWidget(sliderElev_);
+  widget_3d_map_show_layout->addWidget(widget_sliderElev_);
+
+  widget_sliderBright_ = new QWidget(widget_3d_map_show_);
+  QHBoxLayout* widget_sliderBright_layout =
+      new QHBoxLayout(widget_sliderBright_);
+  QLabel* label_sliderBright = new QLabel("Bright", widget_3d_map_show_);
+  widget_sliderBright_layout->addWidget(label_sliderBright);
+  sliderBright_ = new QSlider(Qt::Orientation::Horizontal, widget_3d_map_show_);
+  sliderBright_->setRange(20, 300);
+  sliderBright_->setValue(100);
+  widget_sliderBright_layout->addWidget(sliderBright_);
+  widget_3d_map_show_layout->addWidget(widget_sliderBright_);
+
   operation_layout->addWidget(widget_3d_map_show_);
   widget_3d_map_show_->hide();
 
@@ -162,6 +220,21 @@ void MapMainWidget::SignalsLink() {
           &MapMainWidget::SlotUpdate3DMapShow);
   connect(slider_3d_height_scal_, &QSlider::valueChanged, this,
           &MapMainWidget::SlotUpdate3dHeightScal);
+
+  // 环境光：0~100 → 0.0~1.0
+  connect(sliderAmbient_, &QSlider::valueChanged, this,
+          [this](int v) { w3d_widget_->SetAmbient(v / 100.0f); });
+  // 方位角：0~359
+  connect(sliderAzimuth_, &QSlider::valueChanged, this,
+          [this](int v) { w3d_widget_->SetLightAzimuth(float(v)); });
+  // 高度角：5~89
+  connect(sliderElev_, &QSlider::valueChanged, this,
+          [this](int v) { w3d_widget_->SetLightElevation(float(v)); });
+  // 亮度：20~300 → 0.2~3.0
+  connect(sliderBright_, &QSlider::valueChanged, this,
+          [this](int v) { w3d_widget_->SetBrightness(v / 100.0f); });
+  connect(combo_preset_light_, &QComboBox::currentIndexChanged, this,
+          [this](int index) { w3d_widget_->ApplyLightPreset(index); });
 }
 
 void MapMainWidget::SlotUpdateMapSourceImage() {
@@ -231,40 +304,61 @@ void MapMainWidget::SlotOnPathRemoved(quint64 id) {
 void MapMainWidget::SlotOnEnter3DClicked() {
   if (!map_view_) return;
 
-  bool map_view_show = map_view_->isVisible();
-  if (map_view_show) {
-    // 获取当前地图中心经纬
-    QPointF centerScene =
-        map_view_->mapToScene(map_view_->viewport()->rect().center());
-    double lat = 0, lon = 0;
-    if (!map_view_->SceneToLatLon(centerScene, lat, lon)) {
-      // 无法转换
-      return;
-    }
-
-    // 100km 半径
-    double radiusMeters = 1000.0;
-    connect(w3d_widget_, &Map3DWidget::SignalReady, this, [this]() {
-      // 3D ready，后续 UI 切换逻辑...
-      qDebug() << "3D ready";
-    });
-    connect(w3d_widget_, &Map3DWidget::Failed, this,
-            [this](const QString& reason) {
-              qWarning() << "3D build failed:" << reason;
-            });
-
-    w3d_widget_->Build3DFromCenter(lat, lon, radiusMeters);
-
-    btn_show_point_->setChecked(true);
-    btn_enter_3d_->setText("quit 3d");
-  } else {
+  const bool map_view_show = map_view_->isVisible();
+  if (!map_view_show) {
     btn_enter_3d_->setText("enter 3d");
+    map_view_->setVisible(true);
+    w3d_widget_->setVisible(false);
+    widget_map_show_->setVisible(true);
+    widget_3d_map_show_->setVisible(false);
+    return;
   }
 
-  map_view_->setVisible(!map_view_show);
-  w3d_widget_->setVisible(map_view_show);
-  widget_map_show_->setVisible(!map_view_show);
-  widget_3d_map_show_->setVisible(map_view_show);
+  // 判断亮度调节显示哪些内容
+  widget_sliderAmbient_->setVisible(btn_show_point_->isChecked());
+  widget_sliderAzimuth_->setVisible(btn_show_point_->isChecked());
+  widget_sliderElev_->setVisible(btn_show_point_->isChecked());
+
+  // ---- 1. 中心经纬度 ----
+  QRect vp = map_view_->viewport()->rect();
+  QPointF centerScene = map_view_->mapToScene(vp.center());
+  double lat = 0, lon = 0;
+  if (!map_view_->SceneToLatLon(centerScene, lat, lon)) return;
+
+  // ---- 2. 反算 metersPerPixel：取视口中心水平方向 100px 的两点 ----
+  double latB = 0, lonB = 0;
+  const int probe = 100;
+  QPointF probeScene = map_view_->mapToScene(vp.center() + QPoint(probe, 0));
+  double metersPerPixel = 30.0;  // 兜底默认值
+  if (map_view_->SceneToLatLon(probeScene, latB, lonB)) {
+    const double dLon = std::abs(lonB - lon);
+    if (dLon > 1e-12) {
+      // 经度差 → 东西向距离（乘 cos(lat)）
+      const double meters =
+          dLon * M_PI / 180.0 * 6371000.0 * std::cos(lat * M_PI / 180.0);
+      metersPerPixel = meters / probe;
+    }
+  }
+  qDebug() << "[2d] center" << lat << lon << "mpp" << metersPerPixel;
+
+  // ---- 3. 用真实可视范围建 3D ----
+  connect(w3d_widget_, &Map3DWidget::SignalReady, this,
+          [this]() { qDebug() << "3D ready"; });
+  connect(w3d_widget_, &Map3DWidget::Failed, this,
+          [this](const QString& reason) {
+            qWarning() << "3D build failed:" << reason;
+          });
+
+  w3d_widget_->Build3DFromView(lat, lon, metersPerPixel, vp.width(),
+                               vp.height());
+
+  btn_show_point_->setChecked(true);
+  btn_enter_3d_->setText("quit 3d");
+
+  map_view_->setVisible(false);
+  w3d_widget_->setVisible(true);
+  widget_map_show_->setVisible(false);
+  widget_3d_map_show_->setVisible(true);
 }
 
 void MapMainWidget::SlotUpdate3DMapShow() {
@@ -278,6 +372,9 @@ void MapMainWidget::SlotUpdate3DMapShow() {
       w3d_widget_->UpdateMap3dShowType(kMap3DShowTypeTexture);
     }
   }
+  widget_sliderAmbient_->setVisible(btn_show_point_->isChecked());
+  widget_sliderAzimuth_->setVisible(btn_show_point_->isChecked());
+  widget_sliderElev_->setVisible(btn_show_point_->isChecked());
 }
 
 void MapMainWidget::SlotUpdate3dHeightScal(int scal) {
