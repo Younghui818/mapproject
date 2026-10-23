@@ -38,6 +38,15 @@ class Map3DWidget : public QWidget {
  signals:
   void SignalReady();
   void Failed(const QString& reason);
+  void PathSaved(quint64 id, const QString& name);
+  void PathRemoved(quint64 id);
+  void PathPointAdded(int count);
+
+ public slots:
+  void SetAddingPath(bool enable);
+  quint64 SaveCurrentPath(const QString& name = QString());
+  void RemoveSavedPathById(quint64 id);
+  void ClearAllPaths();
 
  private:
   Scene3DRenderer* renderer_;

@@ -72,11 +72,35 @@ class Scene3DRenderer : public QWidget {
 
   QVector3D applyBrightnessContrast(const QVector3D& c) const;
 
+  // ---------- 3D 路径绘制 ----------
+  void SetAddingPath(bool enable);
+  bool IsAddingPath() const { return adding_path_; }
+  int CurrentPathPointCount() const { return current_path_uv_.size(); }
+
+  quint64 SaveCurrentPath(const QString& name = QString());
+  void RemoveSavedPathById(quint64 id);
+  void ClearAllPaths();
+
+  void SetPathColor(const QColor& c);
+  void SetPathWidth(double meters);  // <=0 表示按场景尺度自适应
+
+  // 与 2D 视图互通（可选）
+  void SetGeoOrigin(double lat, double lon) {
+    geo_lat_ = lat;
+    geo_lon_ = lon;
+  }
+  bool WorldToLatLon(const QVector3D& w, double& outLat, double& outLon) const;
+  QVector<QVector<QVector3D>> SavedPathsWorld() const;
+
  protected:
   bool eventFilter(QObject* obj, QEvent* ev) override;
 
  signals:
   void ClickedAt(double x, double y, double z);
+
+  void PathPointAdded(int count);
+  void PathSaved(quint64 id, const QString& name);
+  void PathRemoved(quint64 id);
 
  private:
   void setupScene();
@@ -93,6 +117,23 @@ class Scene3DRenderer : public QWidget {
   void refreshColors();  // ★ 只重算并覆写颜色 buffer
   QVector3D lightDirFromAngles() const;
   QImage applyImageAdjust(const QImage& src) const;
+
+  // 坐标换算
+  QVector2D WorldToGridUV(const QVector3D& w) const;
+  QVector3D GridUVToWorld(const QVector2D& uv) const;
+  float HeightAtUV(float u, float v) const;
+  float HeightAtWorld(const QVector3D& w) const;
+
+  // 屏幕点 → 地形交点（射线步进 + 二分细化）
+  bool PickTerrain(const QPoint& localPos, QVector3D& out) const;
+  static QVector3D Unproject(const QMatrix4x4& invVP, float nx, float ny,
+                             float nz);
+
+  float PathHalfWidth() const;
+  Qt3DCore::QEntity* BuildPathEntity(const QVector<QVector3D>& pts);
+  void RebuildCurrentPathEntity();
+  void RefreshAllPathEntities();
+  void AppendPathPoint(const QVector3D& world);
 
   Qt3DExtras::Qt3DWindow* view_ = nullptr;
   QWidget* container_ = nullptr;
@@ -139,4 +180,27 @@ class Scene3DRenderer : public QWidget {
   float contrast_ = 1.0f;
 
   MemoryTextureImage* terrainTexImage_ = nullptr;
+
+  // 状态
+  bool adding_path_ = false;
+  QPoint press_pos_;
+  bool potential_click_ = false;
+  QObject* mouse_owner_ = nullptr;  // 防 container_/view_ 双投递
+  const int click_threshold_ = 6;   // 超过 6px 视为拖拽而非点击
+
+  // 当前路径（存归一化 uv，不存世界坐标）
+  QVector<QVector2D> current_path_uv_;
+  Qt3DCore::QEntity* current_path_entity_ = nullptr;
+
+  // 已保存路径（平行数组，按 index 对齐）
+  QVector<QVector<QVector2D>> saved_paths_uv_;
+  QVector<quint64> saved_path_ids_;
+  QVector<QString> saved_path_names_;
+  QVector<Qt3DCore::QEntity*> saved_path_entities_;
+
+  quint64 next_path_id_ = 1;
+  QColor path_color_{230, 60, 60};
+  double path_width_m_ = 0.0;        // 0 → 自适应
+  double path_width_ratio_ = 0.006;  // 自适应: max(width_,depth_) * ratio * 0.5
+  double geo_lat_ = 0.0, geo_lon_ = 0.0;
 };

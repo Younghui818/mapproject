@@ -211,6 +211,10 @@ void MapMainWidget::SignalsLink() {
           &MapMainWidget::SlotOnPathSaved);
   connect(map_view_, &MapView::PathRemoved, this,
           &MapMainWidget::SlotOnPathRemoved);
+  connect(w3d_widget_, &Map3DWidget::PathSaved, this,
+          &MapMainWidget::SlotOnPathSaved);
+  connect(w3d_widget_, &Map3DWidget::PathRemoved, this,
+          &MapMainWidget::SlotOnPathRemoved);
 
   connect(btn_enter_3d_, &QPushButton::clicked, this,
           &MapMainWidget::SlotOnEnter3DClicked);
@@ -247,14 +251,29 @@ void MapMainWidget::SlotUpdateMapSourceImage() {
 
 void MapMainWidget::SlotStartMouseAddPathChecked(int state) {
   bool enable = (state != 0);
-  if (map_view_) {
-    map_view_->SetAddingPath(enable);
+  if (btn_enter_3d_->text() == "enter 3d") {
+    if (map_view_) {
+      map_view_->SetAddingPath(enable);
+    }
+  } else {
+    if (w3d_widget_) {
+      w3d_widget_->SetAddingPath(enable);
+    }
   }
 }
 
 void MapMainWidget::SlotClearAllPath() {
   if (map_view_) {
-    map_view_->ClearAllPaths();
+    if (btn_enter_3d_->text() == "enter 3d") {
+      if (map_view_) {
+        map_view_->ClearAllPaths();
+      }
+    } else {
+      if (w3d_widget_) {
+        w3d_widget_->ClearAllPaths();
+      }
+    }
+
     // 清空侧边 UI
     QLayoutItem* child;
     while ((child = paths_list_layout_->takeAt(0)) != nullptr) {
@@ -268,8 +287,17 @@ void MapMainWidget::SlotClearAllPath() {
 
 void MapMainWidget::SlotEndPath() {
   if (!map_view_) return;
-  // 这里用简单的命名策略：Path <id>
-  quint64 id = map_view_->SaveCurrentPath(QString());
+  quint64 id;
+  if (btn_enter_3d_->text() == "enter 3d") {
+    if (map_view_) {
+      id = map_view_->SaveCurrentPath(QString());
+    }
+  } else {
+    if (w3d_widget_) {
+      id = w3d_widget_->SaveCurrentPath(QString());
+    }
+  }
+
   Q_UNUSED(id);
   cbx_mouse_add_point_->setChecked(false);
   // PathSaved 信号会通知并添加侧边 UI

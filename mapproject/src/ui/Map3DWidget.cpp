@@ -345,6 +345,13 @@ Map3DWidget::Map3DWidget(QWidget* parent)
   auto* l = new QVBoxLayout(this);
   l->setContentsMargins(0, 0, 0, 0);
   l->addWidget(renderer_);
+
+  connect(renderer_, &Scene3DRenderer::PathSaved, this,
+          &Map3DWidget::PathSaved);
+  connect(renderer_, &Scene3DRenderer::PathRemoved, this,
+          &Map3DWidget::PathRemoved);
+  connect(renderer_, &Scene3DRenderer::PathPointAdded, this,
+          &Map3DWidget::PathPointAdded);
 }
 
 Map3DWidget::~Map3DWidget() = default;
@@ -632,4 +639,17 @@ void Map3DWidget::SetContrast(float v) {
 
 void Map3DWidget::ApplyLightPreset(int idx) {
   if (renderer_) renderer_->ApplyLightPreset(idx);
+}
+
+void Map3DWidget::SetAddingPath(bool enable) {
+  if (renderer_) renderer_->SetAddingPath(enable);
+}
+quint64 Map3DWidget::SaveCurrentPath(const QString& name) {
+  return renderer_ ? renderer_->SaveCurrentPath(name) : 0;
+}
+void Map3DWidget::RemoveSavedPathById(quint64 id) {
+  if (renderer_) renderer_->RemoveSavedPathById(id);
+}
+void Map3DWidget::ClearAllPaths() {
+  if (renderer_) renderer_->ClearAllPaths();
 }
