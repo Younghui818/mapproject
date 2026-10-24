@@ -644,12 +644,23 @@ void Map3DWidget::ApplyLightPreset(int idx) {
 void Map3DWidget::SetAddingPath(bool enable) {
   if (renderer_) renderer_->SetAddingPath(enable);
 }
+
 quint64 Map3DWidget::SaveCurrentPath(const QString& name) {
   return renderer_ ? renderer_->SaveCurrentPath(name) : 0;
 }
+
 void Map3DWidget::RemoveSavedPathById(quint64 id) {
   if (renderer_) renderer_->RemoveSavedPathById(id);
 }
+
 void Map3DWidget::ClearAllPaths() {
   if (renderer_) renderer_->ClearAllPaths();
+}
+
+void Map3DWidget::SetPathStyle(int width, const QColor& color) {
+  if (renderer_) renderer_->SetPathStyle(width, color);
+}
+
+void Map3DWidget::SetAllPathsStyle(int width, const QColor& color) {
+  if (renderer_) renderer_->SetAllPathsStyle(width, color);
 }

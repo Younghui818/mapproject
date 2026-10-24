@@ -35,10 +35,15 @@ class Map3DWidget : public QWidget {
   void SetContrast(float v);
   void ApplyLightPreset(int idx);
 
+  // 只影响"正在画 + 之后新建"的路径
+  void SetPathStyle(int width, const QColor& color);
+  // 额外把已保存的所有路径一起改样式
+  void SetAllPathsStyle(int width, const QColor& color);
+
  signals:
   void SignalReady();
   void Failed(const QString& reason);
-  void PathSaved(quint64 id, const QString& name);
+  void PathSaved(quint64 id, const QString& name, double lengthMeters);
   void PathRemoved(quint64 id);
   void PathPointAdded(int count);
 
@@ -47,6 +52,7 @@ class Map3DWidget : public QWidget {
   quint64 SaveCurrentPath(const QString& name = QString());
   void RemoveSavedPathById(quint64 id);
   void ClearAllPaths();
+
 
  private:
   Scene3DRenderer* renderer_;

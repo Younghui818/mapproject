@@ -1,42 +1,79 @@
 #include "MapMainWidget.h"
 
+#include <QColorDialog>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QVBoxLayout>
+
+namespace {
+QString FormatLength(double meters) {
+  if (meters < 1.0) return QString::number(meters * 100.0, 'f', 1) + " cm";
+  if (meters < 1000.0) return QString::number(meters, 'f', 1) + " m";
+  return QString::number(meters / 1000.0, 'f', 2) + " km";
+}
+}  // namespace
 
 MapMainWidget::MapMainWidget(QWidget* parent) : QWidget(parent) { InitUI(); }
 
 void MapMainWidget::InitUI() {
   setWindowTitle("MapStudio - Map Demo");
+  setObjectName("MapMainWidget");
 
+  // 左侧地图显示内容
   QHBoxLayout* main_layout = new QHBoxLayout(this);
+  InitMapShowWidget(main_layout);
 
-  // 正常地图显示
-  QWidget* map_view_container = new QWidget(this);
-  QHBoxLayout* container_layout = new QHBoxLayout(map_view_container);
-  container_layout->setContentsMargins(1, 1, 1, 1);
-  map_view_ = new MapView(map_view_container);
-  container_layout->addWidget(map_view_);
-  main_layout->addWidget(map_view_container);
-
-  // 3d地图显示
-  w3d_widget_ = new Map3DWidget(this);
-  container_layout->addWidget(w3d_widget_);
-  w3d_widget_->hide();
-
+  // 右侧操作窗口
   QWidget* widget_operation = new QWidget(this);
   widget_operation->setFixedWidth(240);
   QVBoxLayout* operation_layout = new QVBoxLayout(widget_operation);
   operation_layout->setContentsMargins(1, 1, 1, 1);
   operation_layout->setSpacing(10);
   main_layout->addWidget(widget_operation);
+  // 地图来源、样式内容
+  InitMapSourceDataWidget(operation_layout);
 
+  // 进入、退出3d模式按钮
+  operation_layout->addSpacing(10);
+  btn_enter_3d_ = new QPushButton("enter 3d", widget_operation);
+  btn_enter_3d_->setObjectName("btnPrimary");
+  operation_layout->addWidget(btn_enter_3d_);
+
+  // 3d地图相关控件
+  Init3DMapDataWidget(operation_layout);
+
+  // 路径设置相关内容
+  InitMapPathDataWidget(operation_layout);
+
+  // 进入页面默认设置
+  btn_god_->setChecked(true);
+  btn_rd_->setChecked(true);
+  SignalsLink();
+  SlotUpdateMapSourceImage();
+  UpdatePathColorButton();
+  ApplyPathStyle();
+}
+
+void MapMainWidget::InitMapShowWidget(
+    QHBoxLayout* main_layout) {  // 正常地图显示
+  QWidget* map_view_container = new QWidget(this);
+  QHBoxLayout* container_layout = new QHBoxLayout(map_view_container);
+  container_layout->setContentsMargins(1, 1, 1, 1);
+  map_view_ = new MapView(map_view_container);
+  container_layout->addWidget(map_view_);
+  main_layout->addWidget(map_view_container);
+  // 3d地图显示
+  w3d_widget_ = new Map3DWidget(this);
+  container_layout->addWidget(w3d_widget_);
+  w3d_widget_->hide();
+}
+
+void MapMainWidget::InitMapSourceDataWidget(QVBoxLayout* operation_layout) {
   widget_map_show_ = new QWidget(this);
   widget_map_show_->setObjectName("widget_map_show");
   QVBoxLayout* widget_map_show_layout = new QVBoxLayout(widget_map_show_);
   widget_map_show_layout->setContentsMargins(5, 5, 5, 5);
   widget_map_show_layout->setSpacing(10);
-  operation_layout->addWidget(widget_map_show_);
 
   QWidget* map_sourcer_switcher = new QWidget(widget_map_show_);
   map_sourcer_switcher->setObjectName("map_sourcer_switcher");
@@ -63,12 +100,12 @@ void MapMainWidget::InitUI() {
   cbx_show_cva_->setText("show cva");
   widget_map_show_layout->addWidget(cbx_show_cva_);
   cbx_show_cva_->setChecked(true);
+  operation_layout->addWidget(widget_map_show_);
+}
 
-  operation_layout->addSpacing(10);
-  btn_enter_3d_ = new QPushButton("enter 3d", widget_operation);
-  operation_layout->addWidget(btn_enter_3d_);
-
+void MapMainWidget::Init3DMapDataWidget(QVBoxLayout* operation_layout) {
   widget_3d_map_show_ = new QWidget(this);
+  widget_3d_map_show_->setObjectName("widget_3d_map_show");
   QVBoxLayout* widget_3d_map_show_layout = new QVBoxLayout(widget_3d_map_show_);
 
   QWidget* widget_3d_show_type = new QWidget(widget_3d_map_show_);
@@ -159,32 +196,80 @@ void MapMainWidget::InitUI() {
 
   operation_layout->addWidget(widget_3d_map_show_);
   widget_3d_map_show_->hide();
+}
 
+void MapMainWidget::InitMapPathDataWidget(QVBoxLayout* operation_layout) {
   operation_layout->addSpacing(10);
-  cbx_mouse_add_point_ = new QCheckBox(widget_operation);
+  widget_path_style_ = new QWidget(this);
+  widget_path_style_->setObjectName("widget_path_style");
+  QVBoxLayout* widget_path_style_layout = new QVBoxLayout(widget_path_style_);
+  widget_path_style_layout->setContentsMargins(5, 5, 5, 5);
+  widget_path_style_layout->setSpacing(6);
+  // 线宽
+  QWidget* w_line_width = new QWidget(widget_path_style_);
+  QHBoxLayout* h_line_width = new QHBoxLayout(w_line_width);
+  h_line_width->setContentsMargins(0, 0, 0, 0);
+  h_line_width->setSpacing(6);
+  QLabel* label_line_width = new QLabel("width", w_line_width);
+  slider_path_width_ = new QSlider(Qt::Orientation::Horizontal, w_line_width);
+  slider_path_width_->setRange(1, 20);
+  slider_path_width_->setSingleStep(1);
+  slider_path_width_->setPageStep(1);
+  slider_path_width_->setValue(path_width_);
+  slider_path_width_->setMinimumWidth(80);
+  slider_path_width_->setToolTip("path line width (px)");
+  label_path_width_ = new QLabel(w_line_width);
+  label_path_width_->setFixedWidth(38);
+  label_path_width_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  label_path_width_->setText(QString::number(path_width_));
+  h_line_width->addWidget(label_line_width);
+  h_line_width->addWidget(slider_path_width_, 1);
+  h_line_width->addWidget(label_path_width_);
+  widget_path_style_layout->addWidget(w_line_width);
+  // 颜色
+  QWidget* w_line_color = new QWidget(widget_path_style_);
+  QHBoxLayout* h_line_color = new QHBoxLayout(w_line_color);
+  h_line_color->setContentsMargins(0, 0, 0, 0);
+  h_line_color->setSpacing(6);
+  QLabel* label_line_color = new QLabel("color", w_line_color);
+  btn_path_color_ = new QPushButton(w_line_color);
+  btn_path_color_->setObjectName("btnPathColor");
+  btn_path_color_->setFixedSize(64, 20);
+  btn_path_color_->setCursor(Qt::PointingHandCursor);
+  btn_path_color_->setToolTip("click to pick path color");
+  h_line_color->addWidget(label_line_color);
+  h_line_color->addStretch(1);
+  h_line_color->addWidget(btn_path_color_);
+  widget_path_style_layout->addWidget(w_line_color);
+  // 是否同步应用到已保存路径
+  cbx_apply_all_paths_ = new QCheckBox("apply to saved", widget_path_style_);
+  cbx_apply_all_paths_->setToolTip(
+      "also restyle the paths that are already saved");
+  widget_path_style_layout->addWidget(cbx_apply_all_paths_);
+
+  operation_layout->addWidget(widget_path_style_);
+
+  // 添加管理路径相关控件
+  operation_layout->addSpacing(10);
+  cbx_mouse_add_point_ = new QCheckBox(this);
   cbx_mouse_add_point_->setText("add path");
   operation_layout->addWidget(cbx_mouse_add_point_);
 
   // End path button
-  btn_end_path_ = new QPushButton("End Path", widget_operation);
+  btn_end_path_ = new QPushButton("End Path", this);
   operation_layout->addWidget(btn_end_path_);
 
-  btn_clear_all_path_ = new QPushButton("clear all", widget_operation);
+  btn_clear_all_path_ = new QPushButton("clear all", this);
   operation_layout->addWidget(btn_clear_all_path_);
 
   // 路径列表容器
-  paths_list_widget_ = new QWidget(widget_operation);
+  paths_list_widget_ = new QWidget(this);
   paths_list_layout_ = new QVBoxLayout(paths_list_widget_);
   paths_list_layout_->setContentsMargins(2, 2, 2, 2);
   paths_list_layout_->setSpacing(4);
-  operation_layout->addWidget(new QLabel("Saved Paths:", widget_operation));
+  operation_layout->addWidget(new QLabel("Saved Paths:", this));
   operation_layout->addWidget(paths_list_widget_);
   operation_layout->addStretch(5);
-
-  btn_god_->setChecked(true);
-  SignalsLink();
-  btn_rd_->setChecked(true);
-  SlotUpdateMapSourceImage();
 }
 
 void MapMainWidget::SignalsLink() {
@@ -239,6 +324,13 @@ void MapMainWidget::SignalsLink() {
           [this](int v) { w3d_widget_->SetBrightness(v / 100.0f); });
   connect(combo_preset_light_, &QComboBox::currentIndexChanged, this,
           [this](int index) { w3d_widget_->ApplyLightPreset(index); });
+
+  connect(slider_path_width_, &QSlider::valueChanged, this,
+          &MapMainWidget::SlotPathWidthChanged);
+  connect(btn_path_color_, &QPushButton::clicked, this,
+          &MapMainWidget::SlotPickPathColor);
+  connect(cbx_apply_all_paths_, &QCheckBox::stateChanged, this,
+          &MapMainWidget::SlotApplyAllPathsStyleChanged);
 }
 
 void MapMainWidget::SlotUpdateMapSourceImage() {
@@ -303,22 +395,35 @@ void MapMainWidget::SlotEndPath() {
   // PathSaved 信号会通知并添加侧边 UI
 }
 
-void MapMainWidget::SlotOnPathSaved(quint64 id, const QString& name) {
+void MapMainWidget::SlotOnPathSaved(quint64 id, const QString& name,
+                                    double lengthMeters) {
   // 新建一行： label + delete button
   QWidget* row = new QWidget(paths_list_widget_);
+  row->setObjectName("pathRow");
+
   QHBoxLayout* hl = new QHBoxLayout(row);
   hl->setContentsMargins(2, 2, 2, 2);
-  QLabel* lbl = new QLabel(name, row);
+
+  QLabel* lbl =
+      new QLabel(QString("%1    <span style='color:#47A9FF;'>%2</span>")
+                     .arg(name, FormatLength(lengthMeters)),
+                 row);
+  lbl->setTextFormat(Qt::RichText);
+  lbl->setToolTip(QString("%1 — %2 m").arg(name).arg(lengthMeters, 0, 'f', 2));
+
   QPushButton* del = new QPushButton("Delete", row);
+  del->setObjectName("btnDelete");
   hl->addWidget(lbl);
   hl->addStretch();
   hl->addWidget(del);
   paths_list_layout_->addWidget(row);
 
-  // 删除按钮行为：调用 map_view_->RemoveSavedPathById(id) 并删除 UI 行
   connect(del, &QPushButton::clicked, this, [this, id, row]() {
-    if (map_view_) map_view_->RemoveSavedPathById(id);
-    // UI 删将在 SlotOnPathRemoved 完成（也可以直接删除）
+    if (btn_enter_3d_->text() == "enter 3d") {
+      if (map_view_) map_view_->RemoveSavedPathById(id);
+    } else {
+      if (w3d_widget_) w3d_widget_->RemoveSavedPathById(id);
+    }
     row->deleteLater();
   });
 }
@@ -387,6 +492,7 @@ void MapMainWidget::SlotOnEnter3DClicked() {
   w3d_widget_->setVisible(true);
   widget_map_show_->setVisible(false);
   widget_3d_map_show_->setVisible(true);
+  ApplyPathStyle();
 }
 
 void MapMainWidget::SlotUpdate3DMapShow() {
@@ -410,4 +516,51 @@ void MapMainWidget::SlotUpdate3dHeightScal(int scal) {
     w3d_widget_->SetDemExaggeration(scal / 10);
     edit_3d_height_scal_->setText(QString::number(scal / 10.0, 'f', 1));
   }
+}
+
+void MapMainWidget::SlotPathWidthChanged(int width) {
+  path_width_ = width;
+  label_path_width_->setText(QString::number(width));
+  ApplyPathStyle();
+}
+
+void MapMainWidget::SlotPickPathColor() {
+  QColor c = QColorDialog::getColor(path_color_, this, "Path Color",
+                                    QColorDialog::ShowAlphaChannel);
+  if (!c.isValid()) return;
+  path_color_ = c;
+  UpdatePathColorButton();
+  ApplyPathStyle();
+}
+
+void MapMainWidget::SlotApplyAllPathsStyleChanged(int state) {
+  if (state != 0) ApplyPathStyle();  // 勾选瞬间同步已有路径
+}
+
+void MapMainWidget::ApplyPathStyle() {
+  const bool all = cbx_apply_all_paths_->isChecked();
+
+  // 两个视图都下发，切换 2D/3D 后样式保持一致
+  if (map_view_) {
+    if (all)
+      map_view_->SetAllPathsStyle(path_width_, path_color_);
+    else
+      map_view_->SetPathStyle(path_width_, path_color_);
+  }
+  if (w3d_widget_) {
+    if (all)
+      w3d_widget_->SetAllPathsStyle(path_width_, path_color_);
+    else
+      w3d_widget_->SetPathStyle(path_width_, path_color_);
+  }
+}
+
+void MapMainWidget::UpdatePathColorButton() {
+  btn_path_color_->setStyleSheet(
+      QString("QPushButton#btnPathColor{"
+              "background-color:%1;"
+              "border:1px solid #454B55;"
+              "border-radius:4px;}"
+              "QPushButton#btnPathColor:hover{border-color:#47A9FF;}")
+          .arg(path_color_.name(QColor::HexArgb)));
 }

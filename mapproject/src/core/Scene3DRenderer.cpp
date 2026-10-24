@@ -1063,8 +1063,13 @@ bool Scene3DRenderer::PickTerrain(const QPoint& localPos,
 // ================= 路径实体 =================
 
 float Scene3DRenderer::PathHalfWidth() const {
-  if (path_width_m_ > 0.0) return float(path_width_m_ * 0.5);
-  return float(std::max(width_, depth_) * path_width_ratio_ * 0.5);
+  const double maxDim = std::max(width_, depth_);
+  double m = path_width_m_;
+  if (m <= 0.0) m = double(path_width_px_) * MetersPerWidthUnit();
+
+  // 下限保护：极小值会让路带退化成一条线、拾取球也看不见
+  const double minM = std::max(0.05, maxDim * 0.0002);
+  return float(std::max(m, minM) * 0.5);
 }
 
 Qt3DCore::QEntity* Scene3DRenderer::BuildPathEntity(
@@ -1237,14 +1242,18 @@ void Scene3DRenderer::RefreshAllPathEntities() {
 
 quint64 Scene3DRenderer::SaveCurrentPath(const QString& name) {
   if (current_path_uv_.isEmpty()) return 0;
+
   const quint64 id = next_path_id_++;
+  const double len = ComputePathLengthMeters(current_path_uv_);
+
   saved_paths_uv_.append(current_path_uv_);
   saved_path_ids_.append(id);
   saved_path_names_.append(name.isEmpty() ? QString("Path %1").arg(id) : name);
+  saved_path_lengths_m_.append(len);
   saved_path_entities_.append(current_path_entity_);  // 直接接管已建好的实体
   current_path_entity_ = nullptr;
   current_path_uv_.clear();
-  emit PathSaved(id, saved_path_names_.last());
+  emit PathSaved(id, saved_path_names_.last(), len);
   return id;
 }
 
@@ -1256,6 +1265,7 @@ void Scene3DRenderer::RemoveSavedPathById(quint64 id) {
   saved_path_ids_.removeAt(idx);
   saved_path_names_.removeAt(idx);
   saved_path_entities_.removeAt(idx);
+  saved_path_lengths_m_.removeAt(idx);
   emit PathRemoved(id);
 }
 
@@ -1267,6 +1277,7 @@ void Scene3DRenderer::ClearAllPaths() {
   saved_paths_uv_.clear();
   saved_path_ids_.clear();
   saved_path_names_.clear();
+  saved_path_lengths_m_.clear();
 }
 
 void Scene3DRenderer::SetPathColor(const QColor& c) {
@@ -1289,4 +1300,55 @@ QVector<QVector<QVector3D>> Scene3DRenderer::SavedPathsWorld() const {
     out.push_back(pts);
   }
   return out;
+}
+
+void Scene3DRenderer::SetPathStyle(int width, const QColor& color) {
+  path_width_px_ = std::max(1, width);
+  path_color_ = color;
+  // 像素线宽换算成世界米数（路带是真实几何，必须落在米单位上）
+  path_width_m_ = double(path_width_px_) * MetersPerWidthUnit();
+
+  // 只重建"正在画"的路径；之后新建的点在 BuildPathEntity 里自动用新样式
+  RebuildCurrentPathEntity();
+}
+
+void Scene3DRenderer::SetAllPathsStyle(int width, const QColor& color) {
+  path_width_px_ = std::max(1, width);
+  path_color_ = color;
+  path_width_m_ = double(path_width_px_) * MetersPerWidthUnit();
+
+  // 已保存路径 + 当前路径一起重建（内部已含 RebuildCurrentPathEntity）
+  RefreshAllPathEntities();
+}
+
+double Scene3DRenderer::MetersPerWidthUnit() const {
+  const double maxDim = std::max(width_, depth_);
+  if (maxDim <= 0.0) return 1.0;
+
+  // 与 frameCamera() 保持一致：dist = maxDim * 1.25，FOV 45°
+  // → 取景时视口纵向覆盖的世界高度 ≈ 2 * dist * tan(22.5°)
+  int h = container_ ? container_->height() : (view_ ? view_->height() : 0);
+  if (h <= 1) h = 600;  // 与 doPan() 同一兜底值
+  const double worldH = 2.0 * (maxDim * 1.25) * std::tan(22.5 * M_PI / 180.0);
+  return worldH / double(h);
+}
+
+double Scene3DRenderer::ComputePathLengthMeters(
+    const QVector<QVector2D>& uv) const {
+  if (uv.size() < 2) return 0.0;
+
+  double total = 0.0;
+  QVector3D prev = GridUVToWorld(uv.first());
+  for (int i = 1; i < uv.size(); ++i) {
+    const QVector3D cur = GridUVToWorld(uv.at(i));
+    // 平面距离：只用 X/Z，天然不受 exaggeration_ 影响
+    const double dx = double(cur.x() - prev.x());
+    const double dz = double(cur.z() - prev.z());
+    // 真实高差 = 渲染高度 / 垂直夸张系数
+    const double dh =
+        double(cur.y() - prev.y()) / std::max(0.05, double(exaggeration_));
+    total += std::sqrt(dx * dx + dz * dz + dh * dh);
+    prev = cur;
+  }
+  return total;
 }

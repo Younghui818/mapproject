@@ -1,6 +1,9 @@
 #ifndef MAPVIEW_H
 #define MAPVIEW_H
 
+#include <QBrush>
+#include <QGraphicsEllipseItem>
+#include <QGraphicsPathItem>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsScene>
 #include <QGraphicsView>
@@ -8,19 +11,13 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPen>
 #include <QPoint>
 #include <QSet>
 #include <QTimer>
-#include <QGraphicsPathItem>
-#include <QGraphicsEllipseItem>
-#include <QPen>
-#include <QBrush>
 #include <QVector>
 
-enum MapSources {
-  kMapSourcesAMap = 0,
-  kMapSourcesTianDiTu
-};
+enum MapSources { kMapSourcesAMap = 0, kMapSourcesTianDiTu };
 
 enum ImageType {
   kImageTypeRoads,
@@ -46,7 +43,11 @@ class MapView : public QGraphicsView {
   // 将 scene 坐标转换为经纬度（WGS84）
   bool SceneToLatLon(const QPointF& scenePt, double& outLat,
                      double& outLon) const;
-  // 路径绘制接口
+  // 只影响"正在画 + 之后新建"的路径
+  void SetPathStyle(int width, const QColor& color);
+  // 额外把已保存的所有路径一起改样式
+  void SetAllPathsStyle(int width, const QColor& color);
+
  public slots:
   void SetAddingPath(bool enable);
   void ClearAllPaths();
@@ -55,7 +56,7 @@ class MapView : public QGraphicsView {
   void RemoveSavedPathById(quint64 id);
 
  signals:
-  void PathSaved(quint64 id, const QString& name);
+  void PathSaved(quint64 id, const QString& name, double lengthMeters);
   void PathRemoved(quint64 id);
 
  protected:
@@ -82,6 +83,8 @@ class MapView : public QGraphicsView {
   void ClearTileItems();
   // 缩放时按比例缩放路径（标记使用忽略变换保持像素大小）
   void ScalePaths(double factor);
+  void RefreshPathPen();  // 依据 pen_width_ / pen_color_ 重建 path_pen_
+  double ComputePathLengthMeters(const QVector<QPointF>& pts) const;
 
   QGraphicsScene* scene_;
   QNetworkAccessManager* nam_;
@@ -113,6 +116,7 @@ class MapView : public QGraphicsView {
   QVector<QVector<QGraphicsEllipseItem*>> saved_path_markers_;
   QVector<quint64> saved_path_ids_;
   QVector<QString> saved_path_names_;
+  QVector<double> saved_path_lengths_m_;
 
   QPen path_pen_;
   QBrush marker_brush_;
@@ -120,6 +124,10 @@ class MapView : public QGraphicsView {
 
   // id 生成
   quint64 next_path_id_ = 1;
+
+  // ==== 路径线宽 / 颜色（供 SetPathStyle / SetAllPathsStyle 使用）====
+  int pen_width_ = 2;
+  QColor pen_color_ = Qt::red;
 };
 
 #endif  // MAPVIEW_H

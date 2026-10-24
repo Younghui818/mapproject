@@ -92,6 +92,11 @@ class Scene3DRenderer : public QWidget {
   bool WorldToLatLon(const QVector3D& w, double& outLat, double& outLon) const;
   QVector<QVector<QVector3D>> SavedPathsWorld() const;
 
+  // 只影响"正在画 + 之后新建"的路径
+  void SetPathStyle(int width, const QColor& color);
+  // 额外把已保存的所有路径一起改样式
+  void SetAllPathsStyle(int width, const QColor& color);
+
  protected:
   bool eventFilter(QObject* obj, QEvent* ev) override;
 
@@ -99,7 +104,7 @@ class Scene3DRenderer : public QWidget {
   void ClickedAt(double x, double y, double z);
 
   void PathPointAdded(int count);
-  void PathSaved(quint64 id, const QString& name);
+  void PathSaved(quint64 id, const QString& name, double lengthMeters);
   void PathRemoved(quint64 id);
 
  private:
@@ -134,6 +139,9 @@ class Scene3DRenderer : public QWidget {
   void RebuildCurrentPathEntity();
   void RefreshAllPathEntities();
   void AppendPathPoint(const QVector3D& world);
+  // UI 像素线宽 → 世界米数的换算基准
+  double MetersPerWidthUnit() const;
+  double ComputePathLengthMeters(const QVector<QVector2D>& uv) const;
 
   Qt3DExtras::Qt3DWindow* view_ = nullptr;
   QWidget* container_ = nullptr;
@@ -197,10 +205,13 @@ class Scene3DRenderer : public QWidget {
   QVector<quint64> saved_path_ids_;
   QVector<QString> saved_path_names_;
   QVector<Qt3DCore::QEntity*> saved_path_entities_;
+  QVector<double> saved_path_lengths_m_;
 
   quint64 next_path_id_ = 1;
   QColor path_color_{230, 60, 60};
   double path_width_m_ = 0.0;        // 0 → 自适应
   double path_width_ratio_ = 0.006;  // 自适应: max(width_,depth_) * ratio * 0.5
   double geo_lat_ = 0.0, geo_lon_ = 0.0;
+
+  int path_width_px_ = 3;
 };
