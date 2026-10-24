@@ -1215,7 +1215,7 @@ void Scene3DRenderer::SetAddingPath(bool enable) {
 void Scene3DRenderer::AppendPathPoint(const QVector3D& world) {
   current_path_uv_.append(WorldToGridUV(world));
   RebuildCurrentPathEntity();
-  emit PathPointAdded(current_path_uv_.size());
+  emit SignalPathPointAdded(current_path_uv_.size());
 }
 
 void Scene3DRenderer::RebuildCurrentPathEntity() {
@@ -1253,7 +1253,7 @@ quint64 Scene3DRenderer::SaveCurrentPath(const QString& name) {
   saved_path_entities_.append(current_path_entity_);  // 直接接管已建好的实体
   current_path_entity_ = nullptr;
   current_path_uv_.clear();
-  emit PathSaved(id, saved_path_names_.last(), len);
+  emit SignalPathSaved(id, saved_path_names_.last(), len);
   return id;
 }
 
@@ -1266,7 +1266,7 @@ void Scene3DRenderer::RemoveSavedPathById(quint64 id) {
   saved_path_names_.removeAt(idx);
   saved_path_entities_.removeAt(idx);
   saved_path_lengths_m_.removeAt(idx);
-  emit PathRemoved(id);
+  emit SignalPathRemoved(id);
 }
 
 void Scene3DRenderer::ClearAllPaths() {

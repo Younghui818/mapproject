@@ -49,15 +49,15 @@ class MapView : public QGraphicsView {
   void SetAllPathsStyle(int width, const QColor& color);
 
  public slots:
-  void SetAddingPath(bool enable);
-  void ClearAllPaths();
+  void SlotSetAddingPath(bool enable);
+  void SlotClearAllPaths();
   // 主动结束并保存当前路径（返回路径 id 或 0 表示失败/无路径）
-  quint64 SaveCurrentPath(const QString& name);
-  void RemoveSavedPathById(quint64 id);
+  quint64 SlotSaveCurrentPath(const QString& name);
+  void SlotRemoveSavedPathById(quint64 id);
 
  signals:
-  void PathSaved(quint64 id, const QString& name, double lengthMeters);
-  void PathRemoved(quint64 id);
+  void SignalPathSaved(quint64 id, const QString& name, double lengthMeters);
+  void SignalPathRemoved(quint64 id);
 
  protected:
   void wheelEvent(QWheelEvent* event) override;

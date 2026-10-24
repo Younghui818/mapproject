@@ -292,13 +292,13 @@ void MapMainWidget::SignalsLink() {
           &MapMainWidget::SlotEndPath);
 
   // 监听 map_view 的 path saved/removed 信号
-  connect(map_view_, &MapView::PathSaved, this,
+  connect(map_view_, &MapView::SignalPathSaved, this,
           &MapMainWidget::SlotOnPathSaved);
-  connect(map_view_, &MapView::PathRemoved, this,
+  connect(map_view_, &MapView::SignalPathRemoved, this,
           &MapMainWidget::SlotOnPathRemoved);
-  connect(w3d_widget_, &Map3DWidget::PathSaved, this,
+  connect(w3d_widget_, &Map3DWidget::SignalPathSaved, this,
           &MapMainWidget::SlotOnPathSaved);
-  connect(w3d_widget_, &Map3DWidget::PathRemoved, this,
+  connect(w3d_widget_, &Map3DWidget::SignalPathRemoved, this,
           &MapMainWidget::SlotOnPathRemoved);
 
   connect(btn_enter_3d_, &QPushButton::clicked, this,
@@ -345,11 +345,11 @@ void MapMainWidget::SlotStartMouseAddPathChecked(int state) {
   bool enable = (state != 0);
   if (btn_enter_3d_->text() == "enter 3d") {
     if (map_view_) {
-      map_view_->SetAddingPath(enable);
+      map_view_->SlotSetAddingPath(enable);
     }
   } else {
     if (w3d_widget_) {
-      w3d_widget_->SetAddingPath(enable);
+      w3d_widget_->SlotSetAddingPath(enable);
     }
   }
 }
@@ -358,11 +358,11 @@ void MapMainWidget::SlotClearAllPath() {
   if (map_view_) {
     if (btn_enter_3d_->text() == "enter 3d") {
       if (map_view_) {
-        map_view_->ClearAllPaths();
+        map_view_->SlotClearAllPaths();
       }
     } else {
       if (w3d_widget_) {
-        w3d_widget_->ClearAllPaths();
+        w3d_widget_->SlotClearAllPaths();
       }
     }
 
@@ -382,11 +382,11 @@ void MapMainWidget::SlotEndPath() {
   quint64 id;
   if (btn_enter_3d_->text() == "enter 3d") {
     if (map_view_) {
-      id = map_view_->SaveCurrentPath(QString());
+      id = map_view_->SlotSaveCurrentPath(QString());
     }
   } else {
     if (w3d_widget_) {
-      id = w3d_widget_->SaveCurrentPath(QString());
+      id = w3d_widget_->SlotSaveCurrentPath(QString());
     }
   }
 
@@ -420,9 +420,9 @@ void MapMainWidget::SlotOnPathSaved(quint64 id, const QString& name,
 
   connect(del, &QPushButton::clicked, this, [this, id, row]() {
     if (btn_enter_3d_->text() == "enter 3d") {
-      if (map_view_) map_view_->RemoveSavedPathById(id);
+      if (map_view_) map_view_->SlotRemoveSavedPathById(id);
     } else {
-      if (w3d_widget_) w3d_widget_->RemoveSavedPathById(id);
+      if (w3d_widget_) w3d_widget_->SlotRemoveSavedPathById(id);
     }
     row->deleteLater();
   });
@@ -477,7 +477,7 @@ void MapMainWidget::SlotOnEnter3DClicked() {
   // ---- 3. 用真实可视范围建 3D ----
   connect(w3d_widget_, &Map3DWidget::SignalReady, this,
           [this]() { qDebug() << "3D ready"; });
-  connect(w3d_widget_, &Map3DWidget::Failed, this,
+  connect(w3d_widget_, &Map3DWidget::SignalFailed, this,
           [this](const QString& reason) {
             qWarning() << "3D build failed:" << reason;
           });

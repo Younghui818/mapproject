@@ -101,11 +101,10 @@ class Scene3DRenderer : public QWidget {
   bool eventFilter(QObject* obj, QEvent* ev) override;
 
  signals:
-  void ClickedAt(double x, double y, double z);
-
-  void PathPointAdded(int count);
-  void PathSaved(quint64 id, const QString& name, double lengthMeters);
-  void PathRemoved(quint64 id);
+  void SignalClickedAt(double x, double y, double z);
+  void SignalPathPointAdded(int count);
+  void SignalPathSaved(quint64 id, const QString& name, double lengthMeters);
+  void SignalPathRemoved(quint64 id);
 
  private:
   void setupScene();

@@ -42,17 +42,16 @@ class Map3DWidget : public QWidget {
 
  signals:
   void SignalReady();
-  void Failed(const QString& reason);
-  void PathSaved(quint64 id, const QString& name, double lengthMeters);
-  void PathRemoved(quint64 id);
-  void PathPointAdded(int count);
+  void SignalFailed(const QString& reason);
+  void SignalPathSaved(quint64 id, const QString& name, double lengthMeters);
+  void SignalPathRemoved(quint64 id);
+  void SignalPathPointAdded(int count);
 
  public slots:
-  void SetAddingPath(bool enable);
-  quint64 SaveCurrentPath(const QString& name = QString());
-  void RemoveSavedPathById(quint64 id);
-  void ClearAllPaths();
-
+  void SlotSetAddingPath(bool enable);
+  quint64 SlotSaveCurrentPath(const QString& name = QString());
+  void SlotRemoveSavedPathById(quint64 id);
+  void SlotClearAllPaths();
 
  private:
   Scene3DRenderer* renderer_;
@@ -62,7 +61,4 @@ class Map3DWidget : public QWidget {
   MeshBuilder* meshBuilder_;
 
   Map3DShowType type_ = kMap3DShowTypePoint;
-
-  // DEMO
-  void Show3DImageDemo();
 };

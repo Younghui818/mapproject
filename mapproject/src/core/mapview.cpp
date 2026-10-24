@@ -409,7 +409,7 @@ void MapView::ScalePaths(double factor) {
   // above.
 }
 
-quint64 MapView::SaveCurrentPath(const QString& name) {
+quint64 MapView::SlotSaveCurrentPath(const QString& name) {
   if (!current_path_item_ || current_path_points_.isEmpty()) return 0;
 
   quint64 id = next_path_id_++;
@@ -426,11 +426,11 @@ quint64 MapView::SaveCurrentPath(const QString& name) {
   current_path_markers_.clear();
   current_path_points_.clear();
 
-  emit PathSaved(id, saved_path_names_.last(), len);
+  emit SignalPathSaved(id, saved_path_names_.last(), len);
   return id;
 }
 
-void MapView::RemoveSavedPathById(quint64 id) {
+void MapView::SlotRemoveSavedPathById(quint64 id) {
   int idx = saved_path_ids_.indexOf(id);
   if (idx < 0) return;
   // remove path item
@@ -453,10 +453,10 @@ void MapView::RemoveSavedPathById(quint64 id) {
   saved_path_ids_.removeAt(idx);
   saved_path_lengths_m_.removeAt(idx);
 
-  emit PathRemoved(id);
+  emit SignalPathRemoved(id);
 }
 
-void MapView::SetAddingPath(bool enable) {
+void MapView::SlotSetAddingPath(bool enable) {
   adding_path_ = enable;
   potential_click_ = false;
   if (enable) {
@@ -479,7 +479,7 @@ void MapView::SetAddingPath(bool enable) {
   }
 }
 
-void MapView::ClearAllPaths() {
+void MapView::SlotClearAllPaths() {
   // 已保存路径
   for (auto* it : saved_path_items_) {
     if (it) {

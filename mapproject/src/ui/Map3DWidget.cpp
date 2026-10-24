@@ -346,12 +346,12 @@ Map3DWidget::Map3DWidget(QWidget* parent)
   l->setContentsMargins(0, 0, 0, 0);
   l->addWidget(renderer_);
 
-  connect(renderer_, &Scene3DRenderer::PathSaved, this,
-          &Map3DWidget::PathSaved);
-  connect(renderer_, &Scene3DRenderer::PathRemoved, this,
-          &Map3DWidget::PathRemoved);
-  connect(renderer_, &Scene3DRenderer::PathPointAdded, this,
-          &Map3DWidget::PathPointAdded);
+  connect(renderer_, &Scene3DRenderer::SignalPathSaved, this,
+          &Map3DWidget::SignalPathSaved);
+  connect(renderer_, &Scene3DRenderer::SignalPathRemoved, this,
+          &Map3DWidget::SignalPathRemoved);
+  connect(renderer_, &Scene3DRenderer::SignalPathPointAdded, this,
+          &Map3DWidget::SignalPathPointAdded);
 }
 
 Map3DWidget::~Map3DWidget() = default;
@@ -546,16 +546,6 @@ void Map3DWidget::UpdateMap3dShowType(Map3DShowType type) {
   renderer_->SetShowType(type);
 }
 
-void Map3DWidget::Show3DImageDemo() {
-  renderer_->SetPointSize(5.0f);
-  renderer_->SetMeshStep(2);  // 128×128 网格
-  renderer_->SetHeightData(MakeDemoTerrain(256),
-                           /*width=*/200.0, /*depth=*/200.0,
-                           /*maxHeight=*/45.0);
-
-  return;
-}
-
 void Map3DWidget::Build3DFromDemTile(double centerLat, double centerLon,
                                      int zoom) {
   const QPoint t = LonLatToTileXY(centerLat, centerLon, zoom);
@@ -641,19 +631,19 @@ void Map3DWidget::ApplyLightPreset(int idx) {
   if (renderer_) renderer_->ApplyLightPreset(idx);
 }
 
-void Map3DWidget::SetAddingPath(bool enable) {
+void Map3DWidget::SlotSetAddingPath(bool enable) {
   if (renderer_) renderer_->SetAddingPath(enable);
 }
 
-quint64 Map3DWidget::SaveCurrentPath(const QString& name) {
+quint64 Map3DWidget::SlotSaveCurrentPath(const QString& name) {
   return renderer_ ? renderer_->SaveCurrentPath(name) : 0;
 }
 
-void Map3DWidget::RemoveSavedPathById(quint64 id) {
+void Map3DWidget::SlotRemoveSavedPathById(quint64 id) {
   if (renderer_) renderer_->RemoveSavedPathById(id);
 }
 
-void Map3DWidget::ClearAllPaths() {
+void Map3DWidget::SlotClearAllPaths() {
   if (renderer_) renderer_->ClearAllPaths();
 }
 
