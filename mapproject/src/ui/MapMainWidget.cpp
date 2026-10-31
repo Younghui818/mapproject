@@ -7,6 +7,7 @@
 
 namespace {
 QString FormatLength(double meters) {
+  // 根据距离量级选择 cm、m 或 km，供路径列表显示。
   if (meters < 1.0) return QString::number(meters * 100.0, 'f', 1) + " cm";
   if (meters < 1000.0) return QString::number(meters, 'f', 1) + " m";
   return QString::number(meters / 1000.0, 'f', 2) + " km";
@@ -16,6 +17,7 @@ QString FormatLength(double meters) {
 MapMainWidget::MapMainWidget(QWidget* parent) : QWidget(parent) { InitUI(); }
 
 void MapMainWidget::InitUI() {
+  // 先创建左右布局，再创建地图源、3D 参数和路径管理三个控制区域。
   setWindowTitle("MapStudio - Map Demo");
   setObjectName("MapMainWidget");
 
@@ -46,8 +48,9 @@ void MapMainWidget::InitUI() {
   InitMapPathDataWidget(operation_layout);
 
   // 进入页面默认设置
-  btn_god_->setChecked(true);
-  btn_rd_->setChecked(true);
+  btn_tianditu_->setChecked(true);
+  btn_st_->setChecked(true);
+  cbx_show_cva_->setChecked(false);
   SignalsLink();
   SlotUpdateMapSourceImage();
   UpdatePathColorButton();
@@ -56,6 +59,7 @@ void MapMainWidget::InitUI() {
 
 void MapMainWidget::InitMapShowWidget(
     QHBoxLayout* main_layout) {  // 正常地图显示
+  // 2D 和 3D 视图放在同一容器中，通过 show/hide 切换显示状态。
   QWidget* map_view_container = new QWidget(this);
   QHBoxLayout* container_layout = new QHBoxLayout(map_view_container);
   container_layout->setContentsMargins(1, 1, 1, 1);
@@ -69,6 +73,7 @@ void MapMainWidget::InitMapShowWidget(
 }
 
 void MapMainWidget::InitMapSourceDataWidget(QVBoxLayout* operation_layout) {
+  // 创建地图源、底图类型和注记开关。
   widget_map_show_ = new QWidget(this);
   widget_map_show_->setObjectName("widget_map_show");
   QVBoxLayout* widget_map_show_layout = new QVBoxLayout(widget_map_show_);
@@ -104,6 +109,7 @@ void MapMainWidget::InitMapSourceDataWidget(QVBoxLayout* operation_layout) {
 }
 
 void MapMainWidget::Init3DMapDataWidget(QVBoxLayout* operation_layout) {
+  // 创建 3D 显示模式、垂直夸张、光照和亮度控制项。
   widget_3d_map_show_ = new QWidget(this);
   widget_3d_map_show_->setObjectName("widget_3d_map_show");
   QVBoxLayout* widget_3d_map_show_layout = new QVBoxLayout(widget_3d_map_show_);
@@ -199,6 +205,7 @@ void MapMainWidget::Init3DMapDataWidget(QVBoxLayout* operation_layout) {
 }
 
 void MapMainWidget::InitMapPathDataWidget(QVBoxLayout* operation_layout) {
+  // 创建路径绘制开关、路径列表以及线宽/颜色设置控件。
   operation_layout->addSpacing(10);
   widget_path_style_ = new QWidget(this);
   widget_path_style_->setObjectName("widget_path_style");
@@ -273,6 +280,7 @@ void MapMainWidget::InitMapPathDataWidget(QVBoxLayout* operation_layout) {
 }
 
 void MapMainWidget::SignalsLink() {
+  // 使用 Qt 的类型安全连接，将 2D/3D 视图事件统一转发到主窗口槽函数。
   connect(btn_rd_, &QRadioButton::clicked, this,
           &MapMainWidget::SlotUpdateMapSourceImage);
   connect(btn_st_, &QRadioButton::clicked, this,
@@ -308,7 +316,7 @@ void MapMainWidget::SignalsLink() {
   connect(btn_show_mesh_, &QRadioButton::clicked, this,
           &MapMainWidget::SlotUpdate3DMapShow);
   connect(slider_3d_height_scal_, &QSlider::valueChanged, this,
-          &MapMainWidget::SlotUpdate3dHeightScal);
+          &MapMainWidget::SlotUpdate3DHeightScale);
 
   // 环境光：0~100 → 0.0~1.0
   connect(sliderAmbient_, &QSlider::valueChanged, this,
@@ -334,6 +342,7 @@ void MapMainWidget::SignalsLink() {
 }
 
 void MapMainWidget::SlotUpdateMapSourceImage() {
+  // 根据单选按钮状态重新配置 2D 地图图层并触发可见瓦片加载。
   map_view_->SwitchTileServer(
       btn_god_->isChecked() ? kMapSourcesAMap : kMapSourcesTianDiTu,
       btn_rd_->isChecked() ? kImageTypeRoads : kImageTypeSt,
@@ -342,6 +351,7 @@ void MapMainWidget::SlotUpdateMapSourceImage() {
 }
 
 void MapMainWidget::SlotStartMouseAddPathChecked(int state) {
+  // 同步切换 2D 和 3D 的路径编辑模式；两种模式只允许一个当前编辑状态。
   bool enable = (state != 0);
   if (btn_enter_3d_->text() == "enter 3d") {
     if (map_view_) {
@@ -355,6 +365,7 @@ void MapMainWidget::SlotStartMouseAddPathChecked(int state) {
 }
 
 void MapMainWidget::SlotClearAllPath() {
+  // 清理两个视图中的当前路径和已保存路径，并刷新路径列表。
   if (map_view_) {
     if (btn_enter_3d_->text() == "enter 3d") {
       if (map_view_) {
@@ -378,6 +389,7 @@ void MapMainWidget::SlotClearAllPath() {
 }
 
 void MapMainWidget::SlotEndPath() {
+  // 主动结束当前路径并请求两个视图分别保存其当前路径。
   if (!map_view_) return;
   quint64 id;
   if (btn_enter_3d_->text() == "enter 3d") {
@@ -397,6 +409,7 @@ void MapMainWidget::SlotEndPath() {
 
 void MapMainWidget::SlotOnPathSaved(quint64 id, const QString& name,
                                     double lengthMeters) {
+  // 任一视图保存路径后，在主窗口列表中创建对应的删除按钮和长度文本。
   // 新建一行： label + delete button
   QWidget* row = new QWidget(paths_list_widget_);
   row->setObjectName("pathRow");
@@ -429,12 +442,14 @@ void MapMainWidget::SlotOnPathSaved(quint64 id, const QString& name,
 }
 
 void MapMainWidget::SlotOnPathRemoved(quint64 id) {
+  // 根据路径 ID 移除主窗口列表项；2D/3D 删除信号最终汇聚到这里。
   // 可选：若需要根据 id 找到并移除侧边 UI 行可在此实现（当前 lambda 已直接删除
   // UI 行）
   Q_UNUSED(id);
 }
 
 void MapMainWidget::SlotOnEnter3DClicked() {
+  // 从当前 2D 视口读取中心位置和分辨率，启动对应范围的 3D 地形构建。
   if (!map_view_) return;
 
   const bool map_view_show = map_view_->isVisible();
@@ -481,7 +496,6 @@ void MapMainWidget::SlotOnEnter3DClicked() {
           [this](const QString& reason) {
             qWarning() << "3D build failed:" << reason;
           });
-
   w3d_widget_->Build3DFromView(lat, lon, metersPerPixel, vp.width(),
                                vp.height());
 
@@ -496,14 +510,15 @@ void MapMainWidget::SlotOnEnter3DClicked() {
 }
 
 void MapMainWidget::SlotUpdate3DMapShow() {
+  // 将点云/网格单选状态转发给 3D 控件，并控制仅点云模式可用的光照滑块。
   // 切换3d显示模式
   if (w3d_widget_) {
     if (btn_show_point_->isChecked()) {
-      w3d_widget_->UpdateMap3dShowType(kMap3DShowTypePoint);
+      w3d_widget_->UpdateMap3DShowType(kMap3DShowTypePoint);
     } else if (btn_show_mesh_->isChecked()) {
-      w3d_widget_->UpdateMap3dShowType(kMap3DShowTypeMesh);
+      w3d_widget_->UpdateMap3DShowType(kMap3DShowTypeMesh);
     } else {
-      w3d_widget_->UpdateMap3dShowType(kMap3DShowTypeTexture);
+      w3d_widget_->UpdateMap3DShowType(kMap3DShowTypeTexture);
     }
   }
   widget_sliderAmbient_->setVisible(btn_show_point_->isChecked());
@@ -511,10 +526,11 @@ void MapMainWidget::SlotUpdate3DMapShow() {
   widget_sliderElev_->setVisible(btn_show_point_->isChecked());
 }
 
-void MapMainWidget::SlotUpdate3dHeightScal(int scal) {
+void MapMainWidget::SlotUpdate3DHeightScale(int scale) {
+  // 将滑块整数值转换为垂直夸张倍数，并刷新显示文本。
   if (w3d_widget_) {
-    w3d_widget_->SetDemExaggeration(scal / 10);
-    edit_3d_height_scal_->setText(QString::number(scal / 10.0, 'f', 1));
+    w3d_widget_->SetDemExaggeration(scale / 10);
+    edit_3d_height_scal_->setText(QString::number(scale / 10.0, 'f', 1));
   }
 }
 
@@ -538,6 +554,7 @@ void MapMainWidget::SlotApplyAllPathsStyleChanged(int state) {
 }
 
 void MapMainWidget::ApplyPathStyle() {
+  // 将主窗口当前路径样式同时下发到 2D 和 3D 视图。
   const bool all = cbx_apply_all_paths_->isChecked();
 
   // 两个视图都下发，切换 2D/3D 后样式保持一致

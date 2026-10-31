@@ -18,7 +18,7 @@
 #include "TileStitcher.h"
 
 namespace {
-// ---- 规模上限：按需调整 ----
+// ---- 构建规模上限：限制网络请求、纹理和几何数据的最大规模 ----
 constexpr int kMaxDemTiles = 64;         // 下载瓦片上限 8×8（想要更大改这个）
 constexpr int kHardMaxTiles = 100;       // 绝对硬上限，防异常
 constexpr int kTargetGridMax = 1024;     // 拼接后超过此分辨率就重采样
@@ -28,6 +28,7 @@ constexpr int kMaxCloudPoints = 250000;  // 点云点数上限
 const QString kTiandituKey = "4e17baf1ebcefc505f3121c67950cd71";
 
 QString TdtImgUrl(int z, int x, int y) {
+  // 生成天地图影像 WMTS 地址。
   return QString(
              "https://t0.tianditu.gov.cn/img_w/wmts"
              "?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
@@ -41,6 +42,7 @@ QString TdtImgUrl(int z, int x, int y) {
 
 // 影像注记（透明 PNG，叠在影像上层）
 QString TdtCiaUrl(int z, int x, int y) {
+  // 生成天地图影像注记 WMTS 地址；注记瓦片以透明图层叠加。
   return QString(
              "https://t0.tianditu.gov.cn/cia_w/wmts"
              "?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
@@ -56,6 +58,7 @@ QString TdtCiaUrl(int z, int x, int y) {
 QImage StitchImagery(const QMap<QPair<int, int>, QByteArray>& imgTiles,
                      const QMap<QPair<int, int>, QByteArray>& ciaTiles, int x0,
                      int y0, int x1, int y1, bool withLabel) {
+  // 按请求范围创建合成图，缺失瓦片保留背景色，便于识别数据缺口。
   const int nx = x1 - x0 + 1, ny = y1 - y0 + 1;
   QImage out(nx * 256, ny * 256, QImage::Format_RGBA8888);
   out.fill(QColor(70, 70, 75));  // 缺瓦片填深灰，一眼可见
@@ -92,6 +95,7 @@ QImage StitchImagery(const QMap<QPair<int, int>, QByteArray>& imgTiles,
 // 双线性重采样（高程数据用双线性比最邻近平滑，不会出现台阶）
 void ResampleGrid(const std::vector<float>& src, int sc, int sr,
                   std::vector<float>& dst, int dc, int dr) {
+  // 在源网格和目标网格之间做双线性插值，避免直接抽点造成明显台阶。
   dst.assign(size_t(dc) * dr, 0.0f);
   if (src.empty() || sc < 2 || sr < 2 || dc < 2 || dr < 2) return;
   for (int r = 0; r < dr; ++r) {
@@ -116,6 +120,7 @@ void ResampleGrid(const std::vector<float>& src, int sc, int sr,
 
 // 按上限自适应抽稀步长
 int AutoStep(int n, int maxCount) {
+  // 根据 n×n 的理论点数计算抽样步长，控制 GPU 缓冲区规模。
   const long long total = 1LL * n * n;
   if (total <= maxCount) return 1;
   return std::max(1, int(std::ceil(std::sqrt(double(total) / maxCount))));
@@ -123,6 +128,7 @@ int AutoStep(int n, int maxCount) {
 
 // 多峰高斯 + 平滑噪声，生成有真实起伏的 demo 高程图
 QImage MakeDemoTerrain(int size = 256) {
+  // 生成离线演示用地形：低频噪声提供基础起伏，多个高斯峰提供山体形状。
   const int nL = 16;  // 低频噪声网格
   std::vector<float> grid((nL + 1) * (nL + 1));
   std::mt19937 rng(20240610);
@@ -187,6 +193,7 @@ inline float terrariumElev(QRgb p) {
 
 // Terrarium: elev = (R*256 + G + B/256) - 32768
 DemDecode DecodeTerrarium(const QByteArray& png) {
+  // 解码单张 Terrarium PNG，并同时统计该瓦片的最小/最大高程。
   DemDecode d;
   QImage img;
   if (png.isEmpty() || !img.loadFromData(png)) {
@@ -352,12 +359,17 @@ Map3DWidget::Map3DWidget(QWidget* parent)
           &Map3DWidget::SignalPathRemoved);
   connect(renderer_, &Scene3DRenderer::SignalPathPointAdded, this,
           &Map3DWidget::SignalPathPointAdded);
+  connect(renderer_, &Scene3DRenderer::TerrainChanged, this,
+          &Map3DWidget::TerrainChanged);
+  connect(renderer_, &Scene3DRenderer::PathStyleChanged, this,
+          &Map3DWidget::PathStyleChanged);
 }
 
 Map3DWidget::~Map3DWidget() = default;
 
 void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
                                     double radiusMeters) {
+  // 以中心点和半径计算影像/DEM 瓦片范围，随后并发下载两类数据。
   constexpr bool kAlsoFetchImagery = true;  // 贴图阶段再打开
 
   int nx = 1, ny = 1;
@@ -393,6 +405,14 @@ void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
   const int cntX = dx1 - dx0 + 1, cntY = dy1 - dy0 + 1;
   qDebug() << "[dem] z" << demZ << "tiles" << cntX << "x" << cntY << "range x["
            << dx0 << "," << dx1 << "] y[" << dy0 << "," << dy1 << "]";
+
+// ★ 正确：用 dx0/dx1/dy0/dy1/demZ
+  renderer_->SetTileLatLonRange(
+      Scene3DRenderer::TileXToLon(dx0, demZ),
+      Scene3DRenderer::TileXToLon(dx1 + 1, demZ),
+      Scene3DRenderer::TileYToLat(dy1 + 1, demZ),  // 南边界
+      Scene3DRenderer::TileYToLat(dy0, demZ)       // 北边界
+  );
 
   QVector<TileRequest> demReqs;
   for (int ty = dy0; ty <= dy1; ++ty)
@@ -536,66 +556,23 @@ void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
 }
 
 void Map3DWidget::SetDemExaggeration(double k) {
+  // 垂直夸张只影响渲染坐标，不修改原始 DEM 数值。
   if (renderer_) renderer_->SetVerticalExaggeration(k);
 }
 
-void Map3DWidget::UpdateMap3dShowType(Map3DShowType type) {
+void Map3DWidget::UpdateMap3DShowType(Map3DShowType type) {
+  // UI 选择点云/网格后转发给渲染器，并记录当前模式。
   if (!renderer_) {
     return;
   }
   renderer_->SetShowType(type);
 }
 
-void Map3DWidget::Build3DFromDemTile(double centerLat, double centerLon,
-                                     int zoom) {
-  const QPoint t = LonLatToTileXY(centerLat, centerLon, zoom);
-  const double metersPerTile =
-      40075016.686 * std::cos(centerLat * M_PI / 180.0) / double(1 << zoom);
-
-  TileRequest r;
-  r.url = QUrl(QString("https://s3.amazonaws.com/elevation-tiles-prod/"
-                       "terrarium/%1/%2/%3.png")
-                   .arg(zoom)
-                   .arg(t.x())
-                   .arg(t.y()));
-  r.x = t.x();
-  r.y = t.y();
-  r.z = zoom;
-  r.layer = 1;
-
-  qDebug() << "[dem] request z" << zoom << "tile(" << t.x() << "," << t.y()
-           << ") ground" << metersPerTile << "m";
-
-  downloader_->DownloadTiles(
-      QVector<TileRequest>{r},
-      [this, metersPerTile](const TileRequest& tr, const QByteArray& data,
-                            const QString& err) {
-        if (data.isEmpty()) {
-          qWarning() << "[dem] empty:" << err << tr.url.toString();
-          return;
-        }
-        qDebug() << "[dem] bytes:" << data.size();
-        DemDecode d = DecodeTerrarium(data);
-        if (!d.ok) {
-          qWarning() << "[dem] decode failed";
-          return;
-        }
-        qDebug() << "[dem]" << d.w << "x" << d.hgt << "min" << d.minH << "max"
-                 << d.maxH << "relief" << (d.maxH - d.minH) << "m";
-
-        renderer_->SetHeightGrid(d.h, d.w, d.hgt, metersPerTile, metersPerTile);
-        renderer_->SetVerticalExaggeration(2.0);
-        renderer_->SetMeshStep(1);
-        renderer_->SetPointSize(4.0f);
-
-        emit SignalReady();
-      },
-      []() { qDebug() << "[dem] group done"; });
-}
-
 void Map3DWidget::Build3DFromView(double centerLat, double centerLon,
                                   double metersPerPixel, int viewportW,
                                   int viewportH) {
+  // 用视口对角线估算用户当前可见的地面范围，避免固定半径导致覆盖不足或请求过多。
+  if (renderer_) renderer_->SetGeoOrigin(centerLat, centerLon);
   constexpr double kCover = 1.15;  // 比 2D 视野多抓一圈，边缘不露白
   const double halfMin = std::min(viewportW, viewportH) * 0.5;
   const double radius = std::max(300.0, halfMin * metersPerPixel * kCover);
@@ -632,6 +609,7 @@ void Map3DWidget::ApplyLightPreset(int idx) {
 }
 
 void Map3DWidget::SlotSetAddingPath(bool enable) {
+  // 将路径编辑状态转发给 3D 渲染器，并由渲染器负责拾取地形点。
   if (renderer_) renderer_->SetAddingPath(enable);
 }
 

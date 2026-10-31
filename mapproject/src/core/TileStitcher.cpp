@@ -5,6 +5,8 @@ TileStitcher::TileStitcher(QObject* parent) : QObject(parent) {}
 
 QImage TileStitcher::StitchImages(const QVector<QImage>& tiles, int tilesX, int tilesY) {
   if (tilesX <= 0 || tilesY <= 0) return QImage();
+
+  // 以第一张有效瓦片的宽度作为统一瓦片尺寸；缺失瓦片位置保持透明。
   const int tileSize = tiles.isEmpty() ? 256 : tiles.first().width();
   QImage out(tileSize * tilesX, tileSize * tilesY, QImage::Format_RGBA8888);
   out.fill(Qt::transparent);
@@ -27,6 +29,7 @@ QImage TileStitcher::ResizeIfNeeded(const QImage& src, int maxSize) {
   int w = src.width();
   int h = src.height();
   if (w <= maxSize && h <= maxSize) return src;
+  // 以最长边为基准计算缩放比例，保持图像宽高比不变。
   double sf = double(maxSize) / double(std::max(w, h));
   return src.scaled(int(w * sf), int(h * sf), Qt::KeepAspectRatio, Qt::SmoothTransformation);
 }

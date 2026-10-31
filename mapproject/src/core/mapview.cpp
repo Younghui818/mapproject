@@ -36,6 +36,7 @@ MapView::MapView(QWidget* parent)
   connect(verticalScrollBar(), &QScrollBar::valueChanged, this,
           [this] { scroll_timer_.start(150); });
 
+  // 初始视图定位到默认经纬度，再加载当前可见区域的瓦片。
   QPoint hz = LatLonToTile(30.2741, 120.1551, zoom_);
   QPointF centerScene((hz.x() + 0.5) * 256.0, (hz.y() + 0.5) * 256.0);
 
@@ -47,6 +48,7 @@ MapView::MapView(QWidget* parent)
 }
 
 void MapView::wheelEvent(QWheelEvent* event) {
+  // 以鼠标滚轮改变缩放级别；瓦片清空后重新请求可见区域，路径按同一比例缩放。
   QPointF oldCenter = mapToScene(viewport()->rect().center());
   int oldZoom = zoom_;
 
@@ -76,6 +78,7 @@ void MapView::wheelEvent(QWheelEvent* event) {
 }
 
 void MapView::mousePressEvent(QMouseEvent* event) {
+  // 路径模式下先记录按下位置，等 release 时确认是点击还是地图拖拽。
   if (event->button() == Qt::LeftButton) {
     press_pos_ = event->pos();
     potential_click_ = true;
@@ -93,6 +96,7 @@ void MapView::mousePressEvent(QMouseEvent* event) {
 }
 
 void MapView::mouseMoveEvent(QMouseEvent* event) {
+  // 超过点击阈值后切换为拖拽，并通过滚动条移动地图视口。
   if (adding_path_ && potential_click_) {
     // 判断是否超过阈值，若超过则认为是拖拽
     QPoint delta = event->pos() - press_pos_;
@@ -117,6 +121,7 @@ void MapView::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void MapView::mouseReleaseEvent(QMouseEvent* event) {
+  // 释放左键时完成路径加点或结束本次地图拖拽。
   if (event->button() == Qt::LeftButton) {
     if (adding_path_) {
       if (potential_click_) {
@@ -135,6 +140,7 @@ void MapView::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void MapView::SlotOnTileLoaded(QNetworkReply* reply) {
+  // 校验请求时代编号，丢弃缩放/切图后返回的过期响应，再解码并放入场景。
   auto key = reply->request().attribute(QNetworkRequest::User).toPoint();
   int layerId = reply->request().attribute(layer_attr_).toInt();
   quint64 ep = reply->request().attribute(EpochAttr()).toULongLong();
@@ -182,6 +188,7 @@ void MapView::SlotOnTileLoaded(QNetworkReply* reply) {
 }
 
 void MapView::SlotLoadVisibleTiles() {
+  // 根据视口在场景中的范围计算瓦片行列，过滤边界后提交尚未加载的请求。
   QRectF visibleRect = mapToScene(viewport()->rect()).boundingRect();
   const double tileSize = 256.0;
 

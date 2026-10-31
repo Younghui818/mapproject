@@ -42,6 +42,7 @@ inline float at(const std::vector<float>& h, int cols, int rows, int c, int r) {
 }
 
 // 地形分层设色：深谷绿 → 草黄 → 土褐 → 岩石灰 → 雪白
+// 根据归一化高程值生成伪彩色，低处偏蓝绿，高处偏黄红。
 QVector3D terrainColor(float t) {
   t = std::clamp(t, 0.0f, 1.0f);
   struct Stop {
@@ -61,6 +62,7 @@ QVector3D terrainColor(float t) {
   return QVector3D(kS[5].r, kS[5].g, kS[5].b);
 }
 
+// 将环境光、方向光和法线结合，得到单个顶点的明暗颜色。
 QVector3D shadeColor(const QVector3D& base, const QVector3D& n,
                      const QVector3D& L, float ambient) {
   const float lam = std::max(0.0f, QVector3D::dotProduct(n, L));
@@ -70,6 +72,7 @@ QVector3D shadeColor(const QVector3D& base, const QVector3D& n,
 }
 
 // 中心差分法线（世界坐标，含垂直夸张）
+// 使用相邻高程差估算规则网格顶点法线，用于点云和网格的地形光照。
 QVector3D gridNormal(const std::vector<float>& h, int cols, int rows, int c,
                      int r, int s, float dx, float dz, float minH,
                      double exag) {
@@ -247,6 +250,7 @@ Scene3DRenderer::Scene3DRenderer(QWidget* parent) : QWidget(parent) {
 }
 
 void Scene3DRenderer::setupScene() {
+  // 创建 Qt 3D 窗口、根实体、相机和轨道控制器，并把窗口嵌入 QWidget。
   view_ = new Qt3DExtras::Qt3DWindow();
   view_->defaultFrameGraph()->setClearColor(QColor(40, 44, 52));
 
@@ -278,6 +282,10 @@ void Scene3DRenderer::setupScene() {
   lightEntity->addComponent(light);
   lightEntity->addComponent(lightTransform);
 
+  connect(this, &Scene3DRenderer::TerrainChanged, this,
+          &Scene3DRenderer::RefreshAllPathEntities);
+  connect(this, &Scene3DRenderer::PathStyleChanged, this,
+          &Scene3DRenderer::RefreshAllPathEntities);
   view_->setRootEntity(rootEntity_);
 
   container_->installEventFilter(this);
@@ -285,20 +293,10 @@ void Scene3DRenderer::setupScene() {
 }
 
 // ---------- 数据入口 ----------
-
-void Scene3DRenderer::SetHeightData(const QImage& img, double width,
-                                    double depth, double maxHeight) {
-  if (img.isNull()) return;
-  std::vector<float> h(size_t(img.width()) * img.height());
-  for (int y = 0; y < img.height(); ++y)
-    for (int x = 0; x < img.width(); ++x)
-      h[size_t(y) * img.width() + x] =
-          qGray(img.pixel(x, y)) / 255.0f * float(maxHeight);
-  SetHeightGrid(h, img.width(), img.height(), width, depth);
-}
-
 void Scene3DRenderer::SetHeightGrid(const std::vector<float>& heights, int cols,
                                     int rows, double width, double depth) {
+  // 真实 DEM 入口。复制数据后计算高程范围，后续所有
+  // UV/颜色/相机计算都基于该范围。
   if (heights.empty() || cols < 2 || rows < 2) return;
 
   // 防御：地面尺寸为 0 时用分辨率兜底，避免相机塌到原点
@@ -326,83 +324,11 @@ void Scene3DRenderer::SetHeightGrid(const std::vector<float>& heights, int cols,
   rebuild();
 }
 
-// ---------- 切换 ----------
-
-void Scene3DRenderer::SetShowType(Map3DShowType type) {
-  if (showType_ == type && (pointCloudEntity_ || meshEntity_)) return;
-  showType_ = type;
-  rebuild();
-}
-
-void Scene3DRenderer::rebuild() {
-  ClearAll();
-  if (!hasData_ || !rootEntity_) return;
-
-  const float minH = float(heightMin_), maxH = float(heightMax_);
-  const QVector3D L = lightDirFromAngles();
-
-  if (showType_ == kMap3DShowTypePoint) {
-    GeoData g = buildPointCloud(grid_, gridCols_, gridRows_, width_, depth_,
-                                minH, maxH, exaggeration_, pointStep_,
-                                hillshade_, lightDir_, ambient_, flipV_);
-    makeEntity(pointCloudEntity_, &g, true, false);
-    qDebug() << "[3D] point cloud:" << g.pos.size();
-  } else if (showType_ == kMap3DShowTypeMesh) {
-    GeoData g = buildMesh(grid_, gridCols_, gridRows_, width_, depth_, minH,
-                          maxH, exaggeration_, meshStep_, wireframe_,
-                          hillshade_, lightDir_, ambient_, flipV_);
-    makeEntity(meshEntity_, &g, false, wireframe_);
-    qDebug() << "[3D] mesh: verts" << g.pos.size() << "idx" << g.idx.size();
-  }
-  frameCamera();
-  RefreshAllPathEntities();  // 路径跟着地形一起刷新
-}
-
-void Scene3DRenderer::SetPointStep(int step) {
-  step = std::max(1, step);
-  if (pointStep_ == step) return;
-  pointStep_ = step;
-  if (showType_ == kMap3DShowTypePoint) rebuild();
-}
-
-void Scene3DRenderer::SetMeshStep(int step) {
-  step = std::max(1, step);
-  if (meshStep_ == step) return;
-  meshStep_ = step;
-  if (showType_ == kMap3DShowTypeMesh) rebuild();
-}
-
-void Scene3DRenderer::SetWireframe(bool on) {
-  if (wireframe_ == on) return;
-  wireframe_ = on;
-  if (showType_ == kMap3DShowTypeMesh) rebuild();
-}
-
-void Scene3DRenderer::SetHillshade(bool on) {
-  if (hillshade_ == on) return;
-  hillshade_ = on;
-  rebuild();
-}
-
-void Scene3DRenderer::SetVerticalExaggeration(double k) {
-  exaggeration_ = std::max(0.05, k);
-  rebuild();
-}
-
-void Scene3DRenderer::SetPointSize(float px) {
-  pointSize_ = px;
-  applyPointSize();
-}
-
-void Scene3DRenderer::applyPointSize() {
-  for (auto* ps : pointSizeNodes_)
-    if (ps) ps->setValue(pointSize_);
-}
-
 // ---------- 实体构建 / 销毁 ----------
 
 void Scene3DRenderer::makeEntity(Qt3DCore::QEntity*& ent, const void* geoPtr,
                                  bool asPoints, bool wireframe) {
+  // 把 CPU 侧几何数据转换为 Qt 3D 的属性缓冲区、材质和实体。
   const GeoData& g = *static_cast<const GeoData*>(geoPtr);
   const int n = int(g.pos.size());
   if (n == 0) return;
@@ -533,6 +459,7 @@ void Scene3DRenderer::destroyEntity(Qt3DCore::QEntity*& e) {
 }
 
 void Scene3DRenderer::ClearAll() {
+  // 清除地形实体、纹理和路径状态，但保留相机和控件本身。
   pointSizeNodes_.clear();
   terrainTexImage_ = nullptr;  // ★ 新增
   destroyEntity(pointCloudEntity_);
@@ -555,13 +482,8 @@ void Scene3DRenderer::ClearTerrainTexture() {
   rebuild();
 }
 
-void Scene3DRenderer::SetTextureFlipV(bool flip) {
-  if (flipV_ == flip) return;
-  flipV_ = flip;
-  rebuild();
-}
-
 void Scene3DRenderer::updateClipPlanes() {
+  // 根据地形尺寸和垂直夸张倍数设置相机裁剪面，避免近处/远处几何被截断。
   if (!camera_) return;
   const float dist = camera_->position().distanceToPoint(camera_->viewCenter());
   const double relief =
@@ -592,6 +514,7 @@ void Scene3DRenderer::frameCamera() {
 }
 
 bool Scene3DRenderer::eventFilter(QObject* obj, QEvent* ev) {
+  // 统一处理 Qt 3D 窗口的滚轮、拖拽和点击事件，避免容器和内部窗口重复响应。
   if (customZoom_ && obj == view_ && ev->type() == QEvent::Wheel && camera_) {
     auto* we = static_cast<QWheelEvent*>(ev);
 
@@ -636,12 +559,29 @@ bool Scene3DRenderer::eventFilter(QObject* obj, QEvent* ev) {
     if (ev->type() == QEvent::MouseMove) {
       if (!(me->buttons() & Qt::LeftButton)) return true;
       if (adding_path_ && potential_click_) {
-        const QPoint d = me->pos() - press_pos_;
-        if (std::abs(d.x()) > click_threshold_ ||
-            std::abs(d.y()) > click_threshold_) {
-          potential_click_ = false;  // 判定为拖拽 → 转为平移
-          panning_ = true;
-          lastMousePos_ = me->pos();
+        QVector3D hit;
+        float hitU = -1.0f, hitV = -1.0f;
+        if (PickTerrain(me->pos(), hit, hitU, hitV)) {
+          qDebug() << "[DIAG] PickTerrain HIT:"
+                   << "\n  screen pos=" << me->pos() << "\n  world=(" << hit.x()
+                   << hit.y() << hit.z() << ")"
+                   << "\n  uv=(" << hitU << hitV << ")"
+                   << "\n  geo_origin=(" << geo_lat_ << geo_lon_ << ")";
+
+          PathPointRecord rec;
+          double lat, lon;
+          WorldToLatLon(hit, lat, lon);
+          rec.lat = lat;
+          rec.lon = lon;
+          rec.height = hit.y();
+          rec.ref_lat = geo_lat_;
+          current_path_.append(rec);
+
+          emit PathGeometryChanged();
+          RebuildCurrentPathEntity();
+          emit SignalPathPointAdded(current_path_.size());
+        } else {
+          qDebug() << "[DIAG] PickTerrain MISSED at" << me->pos();
         }
       }
       if (panning_) {
@@ -655,12 +595,18 @@ bool Scene3DRenderer::eventFilter(QObject* obj, QEvent* ev) {
     if (me->button() != Qt::LeftButton) return true;
     if (adding_path_ && potential_click_) {
       QVector3D hit;
-      if (PickTerrain(me->pos(), hit)) {
-        AppendPathPoint(hit);
-        qDebug() << "[3d-path] add point" << hit << "count"
-                 << current_path_uv_.size();
-      } else {
-        qWarning() << "[3d-path] pick missed at" << me->pos();
+      float hitU = -1, hitV = -1;
+      if (PickTerrain(me->pos(), hit, hitU, hitV)) {
+        PathPointRecord rec;
+        double lat, lon;
+        WorldToLatLon(hit, lat, lon);
+        rec.lat = lat;
+        rec.lon = lon;
+        rec.height = hit.y();
+        rec.ref_lat = geo_lat_;
+        current_path_.append(rec);
+        qDebug() << "[STORE] uv=(" << hitU << hitV << ")"
+                 << "height=" << hit.y();
       }
     }
     potential_click_ = false;
@@ -711,6 +657,7 @@ QVector3D Scene3DRenderer::lightDirFromAngles() const {
 }
 
 void Scene3DRenderer::refreshColors() {
+  // 不重建位置和索引，只更新已有几何的颜色缓冲，降低调整光照/亮度的开销。
   qDebug() << "[light] refresh: type" << int(showType_) << "useTex"
            << useTexture_ << "hasTexImg" << (terrainTexImage_ != nullptr)
            << "amb" << ambient_ << "bri" << brightness_ << "con" << contrast_;
@@ -832,76 +779,6 @@ QVector3D Scene3DRenderer::applyBrightnessContrast(const QVector3D& c) const {
   return QVector3D(f(c.x()), f(c.y()), f(c.z()));
 }
 
-void Scene3DRenderer::SetAmbient(float v) {
-  ambient_ = std::clamp(v, 0.0f, 1.0f);
-  refreshColors();  // ★ 不再 rebuild
-}
-
-void Scene3DRenderer::SetShadeLight(float x, float y, float z) {
-  const QVector3D L = QVector3D(x, y, z).normalized();
-  elevation_ = std::asin(std::clamp(L.y(), -1.0f, 1.0f)) * 180.0f / float(M_PI);
-  azimuth_ = std::atan2(L.x(), L.z()) * 180.0f / float(M_PI);
-  if (azimuth_ < 0) azimuth_ += 360.0f;
-  refreshColors();
-}
-
-void Scene3DRenderer::SetLightAzimuth(float deg) {
-  azimuth_ = std::fmod(deg, 360.0f);
-  if (azimuth_ < 0) azimuth_ += 360.0f;
-  refreshColors();
-}
-
-void Scene3DRenderer::SetLightElevation(float deg) {
-  elevation_ = std::clamp(deg, 5.0f, 89.0f);
-  refreshColors();
-}
-
-void Scene3DRenderer::SetBrightness(float v) {
-  brightness_ = std::clamp(v, 0.2f, 3.0f);
-  refreshColors();
-}
-
-void Scene3DRenderer::SetContrast(float v) {
-  contrast_ = std::clamp(v, 0.2f, 3.0f);
-  refreshColors();
-}
-
-void Scene3DRenderer::ApplyLightPreset(int idx) {
-  switch (idx) {
-    case 1:  // 明亮：适合暗色底图
-      ambient_ = 0.65f;
-      elevation_ = 55.0f;
-      azimuth_ = 315.0f;
-      brightness_ = 1.25f;
-      contrast_ = 0.9f;
-      break;
-    case 2:  // 强立体：起伏明显
-      ambient_ = 0.22f;
-      elevation_ = 32.0f;
-      azimuth_ = 315.0f;
-      brightness_ = 1.1f;
-      contrast_ = 1.3f;
-      break;
-    case 3:  // 柔和：看整体形态
-      ambient_ = 0.5f;
-      elevation_ = 60.0f;
-      azimuth_ = 315.0f;
-      brightness_ = 1.05f;
-      contrast_ = 0.95f;
-      break;
-    default:  // 0 默认
-      ambient_ = 0.35f;
-      elevation_ = 45.0f;
-      azimuth_ = 315.0f;
-      brightness_ = 1.0f;
-      contrast_ = 1.0f;
-      break;
-  }
-  refreshColors();
-  qDebug() << "[light] preset" << idx << "amb" << ambient_ << "el" << elevation_
-           << "bri" << brightness_ << "con" << contrast_;
-}
-
 QImage Scene3DRenderer::applyImageAdjust(const QImage& src) const {
   if (src.isNull() || (brightness_ == 1.0f && contrast_ == 1.0f)) return src;
 
@@ -931,12 +808,14 @@ QImage Scene3DRenderer::applyImageAdjust(const QImage& src) const {
 // ================= 坐标换算 =================
 
 QVector2D Scene3DRenderer::WorldToGridUV(const QVector3D& w) const {
+  // 将世界 X/Y 映射到 [0,1] 网格坐标；V 轴方向与图像/纹理坐标保持一致。
   if (width_ <= 0.0 || depth_ <= 0.0) return QVector2D(0.5f, 0.5f);
   return QVector2D(float((double(w.x()) + width_ * 0.5) / width_),
                    float((double(w.z()) + depth_ * 0.5) / depth_));
 }
 
 float Scene3DRenderer::HeightAtUV(float u, float v) const {
+  // 对 UV 位置进行双线性插值，供射线拾取和路径贴地使用。
   if (!hasData_ || gridCols_ < 2 || gridRows_ < 2) return 0.0f;
   u = std::clamp(u, 0.0f, 1.0f);
   v = std::clamp(v, 0.0f, 1.0f);
@@ -969,18 +848,6 @@ QVector3D Scene3DRenderer::GridUVToWorld(const QVector2D& uv) const {
   return QVector3D(x, HeightAtUV(uv.x(), uv.y()) + lift, z);
 }
 
-bool Scene3DRenderer::WorldToLatLon(const QVector3D& w, double& outLat,
-                                    double& outLon) const {
-  constexpr double kR = 6378137.0;
-  const double dNorth = -double(w.z());  // 世界 +Z 指向南（网格行号向南增大）
-  const double dEast = double(w.x());
-  const double lat = geo_lat_ + (dNorth / kR) * 180.0 / M_PI;
-  const double cosL = std::max(0.05, std::cos(lat * M_PI / 180.0));
-  outLat = lat;
-  outLon = geo_lon_ + (dEast / (kR * cosL)) * 180.0 / M_PI;
-  return true;
-}
-
 // ================= 拾取 =================
 
 QVector3D Scene3DRenderer::Unproject(const QMatrix4x4& invVP, float nx,
@@ -991,8 +858,13 @@ QVector3D Scene3DRenderer::Unproject(const QMatrix4x4& invVP, float nx,
   return QVector3D(w.x() / w.w(), w.y() / w.w(), w.z() / w.w());
 }
 
-bool Scene3DRenderer::PickTerrain(const QPoint& localPos,
-                                  QVector3D& out) const {
+bool Scene3DRenderer::PickTerrain(const QPoint& localPos, QVector3D& out,
+                                  float& outU, float& outV) const {
+  outU = -1.0f;
+  outV = -1.0f;
+
+  // 将屏幕点反投影成世界射线，沿射线步进寻找与地形的交叉区间，
+  // 再通过二分法细化交点位置。
   if (!camera_ || !hasData_ || width_ <= 0.0 || depth_ <= 0.0) return false;
 
   int W = container_ ? container_->width() : (view_ ? view_->width() : 0);
@@ -1052,6 +924,8 @@ bool Scene3DRenderer::PickTerrain(const QPoint& localPos,
           b = m;
       }
       out = p0 + dir * (0.5f * (a + b));
+      outU = (out.x() + float(width_ * 0.5)) / float(width_);
+      outV = (out.z() + float(depth_ * 0.5)) / float(depth_);
       return true;
     }
     prevT = t;
@@ -1074,6 +948,7 @@ float Scene3DRenderer::PathHalfWidth() const {
 
 Qt3DCore::QEntity* Scene3DRenderer::BuildPathEntity(
     const QVector<QVector3D>& pts) {
+  // 将一条世界坐标路径转换为 Qt 3D 线实体；路径宽度按场景尺度换算。
   if (pts.isEmpty() || !rootEntity_) return nullptr;
 
   auto* ent = new Qt3DCore::QEntity(rootEntity_);
@@ -1201,6 +1076,7 @@ Qt3DCore::QEntity* Scene3DRenderer::BuildPathEntity(
 // ================= 路径 API =================
 
 void Scene3DRenderer::SetAddingPath(bool enable) {
+  // 切换路径编辑状态；关闭编辑时只停止接收新点，不删除已经保存的路径。
   adding_path_ = enable;
   potential_click_ = false;
   mouse_owner_ = nullptr;
@@ -1208,51 +1084,69 @@ void Scene3DRenderer::SetAddingPath(bool enable) {
     container_->setCursor(enable ? Qt::CrossCursor : Qt::ArrowCursor);
   if (enable) {  // 与 2D 一致：进入绘点模式时丢弃未保存路径
     destroyEntity(current_path_entity_);
-    current_path_uv_.clear();
+    current_path_.clear();
   }
 }
 
 void Scene3DRenderer::AppendPathPoint(const QVector3D& world) {
-  current_path_uv_.append(WorldToGridUV(world));
+  // 记录新点的归一化 UV 和地理坐标，并立即更新当前路径实体。
+  PathPointRecord rec;
+  WorldToLatLon(world, rec.lat, rec.lon);
+  rec.height = world.y();
+  rec.ref_lat = geo_lat_;
+  current_path_.append(rec);
+  emit PathGeometryChanged();
   RebuildCurrentPathEntity();
-  emit SignalPathPointAdded(current_path_uv_.size());
+  emit SignalPathPointAdded(current_path_.size());
 }
 
 void Scene3DRenderer::RebuildCurrentPathEntity() {
   destroyEntity(current_path_entity_);
-  if (current_path_uv_.isEmpty()) return;
+  if (current_path_.isEmpty()) return;
+
   QVector<QVector3D> pts;
-  pts.reserve(current_path_uv_.size());
-  for (const QVector2D& uv : current_path_uv_) pts.push_back(GridUVToWorld(uv));
+  pts.reserve(current_path_.size());
+
+  for (const PathPointRecord& rec : current_path_) {
+    QVector3D w = LatLonToWorldAt(rec.lat, rec.lon, rec.ref_lat);
+    w.setY(rec.height);
+    pts.push_back(w);
+  }
+
   current_path_entity_ = BuildPathEntity(pts);
 }
 
 void Scene3DRenderer::RefreshAllPathEntities() {
-  if (!rootEntity_) return;
-  for (int i = 0; i < saved_path_entities_.size(); ++i) {
+  // 重建当前路径
+  RebuildCurrentPathEntity();
+  // 重建所有已保存路径
+  for (int i = 0; i < saved_paths_.size(); ++i) {
     destroyEntity(saved_path_entities_[i]);
     QVector<QVector3D> pts;
-    pts.reserve(saved_paths_uv_[i].size());
-    for (const QVector2D& uv : saved_paths_uv_[i])
-      pts.push_back(GridUVToWorld(uv));
+    pts.reserve(saved_paths_[i].size());
+    for (const PathPointRecord& rec : saved_paths_[i]) {
+      QVector3D w = LatLonToWorldAt(rec.lat, rec.lon, rec.ref_lat);
+      w.setY(rec.height);
+      pts.push_back(w);
+    }
     saved_path_entities_[i] = BuildPathEntity(pts);
   }
-  RebuildCurrentPathEntity();
 }
 
 quint64 Scene3DRenderer::SaveCurrentPath(const QString& name) {
-  if (current_path_uv_.isEmpty()) return 0;
+  if (current_path_.isEmpty()) return 0;
 
   const quint64 id = next_path_id_++;
-  const double len = ComputePathLengthMeters(current_path_uv_);
+  const double len = ComputePathLengthMeters(current_path_);
 
-  saved_paths_uv_.append(current_path_uv_);
+  saved_paths_.append(current_path_);
   saved_path_ids_.append(id);
   saved_path_names_.append(name.isEmpty() ? QString("Path %1").arg(id) : name);
   saved_path_lengths_m_.append(len);
-  saved_path_entities_.append(current_path_entity_);  // 直接接管已建好的实体
+  saved_path_entities_.append(current_path_entity_);
+
   current_path_entity_ = nullptr;
-  current_path_uv_.clear();
+  current_path_.clear();
   emit SignalPathSaved(id, saved_path_names_.last(), len);
   return id;
 }
@@ -1261,45 +1155,33 @@ void Scene3DRenderer::RemoveSavedPathById(quint64 id) {
   const int idx = saved_path_ids_.indexOf(id);
   if (idx < 0) return;
   destroyEntity(saved_path_entities_[idx]);
-  saved_paths_uv_.removeAt(idx);
   saved_path_ids_.removeAt(idx);
   saved_path_names_.removeAt(idx);
   saved_path_entities_.removeAt(idx);
   saved_path_lengths_m_.removeAt(idx);
+  saved_paths_.removeAt(idx);
   emit SignalPathRemoved(id);
 }
 
 void Scene3DRenderer::ClearAllPaths() {
   destroyEntity(current_path_entity_);
-  current_path_uv_.clear();
+  current_path_.clear();
   for (auto*& e : saved_path_entities_) destroyEntity(e);
   saved_path_entities_.clear();
-  saved_paths_uv_.clear();
   saved_path_ids_.clear();
   saved_path_names_.clear();
+  saved_paths_.clear();
   saved_path_lengths_m_.clear();
 }
 
 void Scene3DRenderer::SetPathColor(const QColor& c) {
   path_color_ = c;
-  RefreshAllPathEntities();
+  emit PathStyleChanged();
 }
 
 void Scene3DRenderer::SetPathWidth(double meters) {
   path_width_m_ = meters;
-  RefreshAllPathEntities();
-}
-
-QVector<QVector<QVector3D>> Scene3DRenderer::SavedPathsWorld() const {
-  QVector<QVector<QVector3D>> out;
-  out.reserve(saved_paths_uv_.size());
-  for (const auto& uvList : saved_paths_uv_) {
-    QVector<QVector3D> pts;
-    pts.reserve(uvList.size());
-    for (const QVector2D& uv : uvList) pts.push_back(GridUVToWorld(uv));
-    out.push_back(pts);
-  }
-  return out;
+  emit PathStyleChanged();
 }
 
 void Scene3DRenderer::SetPathStyle(int width, const QColor& color) {
@@ -1310,6 +1192,7 @@ void Scene3DRenderer::SetPathStyle(int width, const QColor& color) {
 
   // 只重建"正在画"的路径；之后新建的点在 BuildPathEntity 里自动用新样式
   RebuildCurrentPathEntity();
+  emit PathStyleChanged();
 }
 
 void Scene3DRenderer::SetAllPathsStyle(int width, const QColor& color) {
@@ -1318,7 +1201,7 @@ void Scene3DRenderer::SetAllPathsStyle(int width, const QColor& color) {
   path_width_m_ = double(path_width_px_) * MetersPerWidthUnit();
 
   // 已保存路径 + 当前路径一起重建（内部已含 RebuildCurrentPathEntity）
-  RefreshAllPathEntities();
+  emit PathStyleChanged();
 }
 
 double Scene3DRenderer::MetersPerWidthUnit() const {
@@ -1334,21 +1217,250 @@ double Scene3DRenderer::MetersPerWidthUnit() const {
 }
 
 double Scene3DRenderer::ComputePathLengthMeters(
-    const QVector<QVector2D>& uv) const {
-  if (uv.size() < 2) return 0.0;
-
-  double total = 0.0;
-  QVector3D prev = GridUVToWorld(uv.first());
-  for (int i = 1; i < uv.size(); ++i) {
-    const QVector3D cur = GridUVToWorld(uv.at(i));
-    // 平面距离：只用 X/Z，天然不受 exaggeration_ 影响
-    const double dx = double(cur.x() - prev.x());
-    const double dz = double(cur.z() - prev.z());
-    // 真实高差 = 渲染高度 / 垂直夸张系数
-    const double dh =
-        double(cur.y() - prev.y()) / std::max(0.05, double(exaggeration_));
-    total += std::sqrt(dx * dx + dz * dz + dh * dh);
-    prev = cur;
+    const QVector<PathPointRecord>& path) const {
+  if (path.size() < 2) return 0.0;
+  constexpr double kR = 6378137.0;
+  double len = 0;
+  for (int i = 1; i < path.size(); ++i) {
+    const double dLat = (path[i].lat - path[i - 1].lat) * M_PI / 180.0;
+    const double dLon = (path[i].lon - path[i - 1].lon) * M_PI / 180.0;
+    const double a = std::sin(dLat / 2) * std::sin(dLat / 2) +
+                     std::cos(path[i - 1].lat * M_PI / 180.0) *
+                         std::cos(path[i].lat * M_PI / 180.0) *
+                         std::sin(dLon / 2) * std::sin(dLon / 2);
+    const double c = 2 * std::atan2(std::sqrt(a), std::sqrt(1 - a));
+    len += kR * c;
   }
-  return total;
+  return len;
+}
+
+bool Scene3DRenderer::LatLonToWorld(double lat, double lon,
+                                    QVector3D& out) const {
+  constexpr double kR = 6378137.0;
+  const double cosL = std::max(0.05, std::cos(geo_lat_ * M_PI / 180.0));
+  const double dNorth = (lat - geo_lat_) * M_PI / 180.0 * kR;
+  const double dEast = (lon - geo_lon_) * M_PI / 180.0 * kR * cosL;
+  out = QVector3D(float(dEast), 0.0f, float(-dNorth));
+  return true;
+}
+
+void Scene3DRenderer::WorldToLatLon(const QVector3D& world, double& lat,
+                                    double& lon) const {
+  constexpr double kR = 6378137.0;
+  const double cosL = std::max(0.05, std::cos(geo_lat_ * M_PI / 180.0));
+  const double dEast = world.x();
+  const double dNorth = -world.z();
+  lon = geo_lon_ + (dEast / (kR * cosL)) * 180.0 / M_PI;
+  lat = geo_lat_ + (dNorth / kR) * 180.0 / M_PI;
+}
+
+QVector3D Scene3DRenderer::GeoToWorld(double lat, double lon) const {
+  constexpr double kR = 6378137.0;
+  const double cosL = std::max(0.05, std::cos(geo_lat_ * M_PI / 180.0));
+  const double dNorth = (lat - geo_lat_) * M_PI / 180.0 * kR;
+  const double dEast = (lon - geo_lon_) * M_PI / 180.0 * kR * cosL;
+  const float x = float(dEast);
+  const float z = float(-dNorth);
+  const QVector2D uv = WorldToGridUV(QVector3D(x, 0, z));
+  const float lift = float(std::max(width_, depth_) * 0.0025);
+  const float y = HeightAtUV(uv.x(), uv.y());
+
+  // ★ DIAG LOG
+  static int callCount = 0;
+  if (++callCount <= 10 || callCount % 20 == 0) {
+    qDebug() << "[DIAG] GeoToWorld #" << callCount << "\n  input lat=" << lat
+             << "lon=" << lon << "\n  geo=(" << geo_lat_ << geo_lon_ << ")"
+             << "\n  dNorth=" << dNorth << "dEast=" << dEast << "\n  → world=("
+             << x << y << z << ")"
+             << "\n  uv=(" << uv.x() << uv.y() << ")";
+  }
+
+  return QVector3D(x, y, z);
+}
+
+QVector3D Scene3DRenderer::LatLonToWorldAt(double lat, double lon,
+                                           double refLat) const {
+  constexpr double kR = 6378137.0;
+  const double cosL = std::max(0.05, std::cos(refLat * M_PI / 180.0));
+  const double dNorth = (lat - refLat) * M_PI / 180.0 * kR;
+  const double dEast = (lon - geo_lon_) * M_PI / 180.0 * kR * cosL;
+  return QVector3D(float(dEast), 0.0f, float(-dNorth));
+}
+
+void Scene3DRenderer::SetGeoOrigin(double lat, double lon) {
+  qDebug() << "═══════════════════════════════════════";
+  qDebug() << "[DIAG] SetGeoOrigin CALLED";
+  qDebug() << "[DIAG]   OLD geo_lat_ =" << geo_lat_ << "geo_lon_ =" << geo_lon_;
+  qDebug() << "[DIAG]   NEW lat =" << lat << "lon =" << lon;
+  geo_lat_ = lat;
+  geo_lon_ = lon;
+  qDebug() << "[DIAG]   hasData_ =" << hasData_;
+  qDebug() << "[DIAG]   → calling RefreshAllPathEntities()";
+  qDebug() << "═══════════════════════════════════════";
+}
+
+double Scene3DRenderer::TileXToLon(int x, int z) {
+  return double(x) / double(1 << z) * 360.0 - 180.0;
+}
+
+double Scene3DRenderer::TileYToLat(int y, int z) {
+  double n = M_PI - 2.0 * M_PI * double(y) / double(1 << z);
+  return 180.0 / M_PI * std::atan(0.5 * (std::exp(n) - std::exp(-n)));
+}
+
+void Scene3DRenderer::SetTileLatLonRange(double lonMin, double lonMax,
+                                         double latMin, double latMax) {
+  tile_lon_min_ = lonMin;
+  tile_lon_max_ = lonMax;
+  tile_lat_min_ = latMin;
+  tile_lat_max_ = latMax;
+  tile_range_valid_ = true;
+
+  qDebug() << "[TILE] lat range:" << latMin << "-" << latMax
+           << "lon range:" << lonMin << "-" << lonMax;
+}
+
+// ---------- 切换 ----------
+
+void Scene3DRenderer::SetShowType(Map3DShowType type) {
+  // 显示模式变化只需重建几何实体，不需要重新下载或解码地形。
+  if (showType_ == type && (pointCloudEntity_ || meshEntity_)) return;
+  showType_ = type;
+  rebuild();
+}
+
+void Scene3DRenderer::rebuild() {
+  // 根据当前显示模式和采样步长重建点云或三角网格实体。
+  ClearAll();
+  if (!hasData_ || !rootEntity_) return;
+
+  const float minH = float(heightMin_), maxH = float(heightMax_);
+  const QVector3D L = lightDirFromAngles();
+
+  if (showType_ == kMap3DShowTypePoint) {
+    GeoData g = buildPointCloud(grid_, gridCols_, gridRows_, width_, depth_,
+                                minH, maxH, exaggeration_, pointStep_,
+                                hillshade_, lightDir_, ambient_, flipV_);
+    makeEntity(pointCloudEntity_, &g, true, false);
+    qDebug() << "[3D] point cloud:" << g.pos.size();
+  } else if (showType_ == kMap3DShowTypeMesh) {
+    GeoData g = buildMesh(grid_, gridCols_, gridRows_, width_, depth_, minH,
+                          maxH, exaggeration_, meshStep_, wireframe_,
+                          hillshade_, lightDir_, ambient_, flipV_);
+    makeEntity(meshEntity_, &g, false, wireframe_);
+    qDebug() << "[3D] mesh: verts" << g.pos.size() << "idx" << g.idx.size();
+  }
+  frameCamera();
+  emit TerrainChanged();
+}
+
+void Scene3DRenderer::SetPointStep(int step) {
+  step = std::max(1, step);
+  if (pointStep_ == step) return;
+  pointStep_ = step;
+  if (showType_ == kMap3DShowTypePoint) rebuild();
+}
+
+void Scene3DRenderer::SetMeshStep(int step) {
+  step = std::max(1, step);
+  if (meshStep_ == step) return;
+  meshStep_ = step;
+  if (showType_ == kMap3DShowTypeMesh) rebuild();
+}
+
+void Scene3DRenderer::SetWireframe(bool on) {
+  if (wireframe_ == on) return;
+  wireframe_ = on;
+  if (showType_ == kMap3DShowTypeMesh) rebuild();
+}
+
+void Scene3DRenderer::SetHillshade(bool on) {
+  if (hillshade_ == on) return;
+  hillshade_ = on;
+  rebuild();
+}
+
+void Scene3DRenderer::SetVerticalExaggeration(double k) {
+  exaggeration_ = std::max(0.05, k);
+  rebuild();
+}
+
+void Scene3DRenderer::SetPointSize(float px) {
+  pointSize_ = px;
+  applyPointSize();
+}
+
+void Scene3DRenderer::applyPointSize() {
+  for (auto* ps : pointSizeNodes_)
+    if (ps) ps->setValue(pointSize_);
+}
+
+void Scene3DRenderer::SetAmbient(float v) {
+  ambient_ = std::clamp(v, 0.0f, 1.0f);
+  refreshColors();  // ★ 不再 rebuild
+}
+
+void Scene3DRenderer::SetShadeLight(float x, float y, float z) {
+  const QVector3D L = QVector3D(x, y, z).normalized();
+  elevation_ = std::asin(std::clamp(L.y(), -1.0f, 1.0f)) * 180.0f / float(M_PI);
+  azimuth_ = std::atan2(L.x(), L.z()) * 180.0f / float(M_PI);
+  if (azimuth_ < 0) azimuth_ += 360.0f;
+  refreshColors();
+}
+
+void Scene3DRenderer::SetLightAzimuth(float deg) {
+  azimuth_ = std::fmod(deg, 360.0f);
+  if (azimuth_ < 0) azimuth_ += 360.0f;
+  refreshColors();
+}
+
+void Scene3DRenderer::SetLightElevation(float deg) {
+  elevation_ = std::clamp(deg, 5.0f, 89.0f);
+  refreshColors();
+}
+
+void Scene3DRenderer::SetBrightness(float v) {
+  brightness_ = std::clamp(v, 0.2f, 3.0f);
+  refreshColors();
+}
+
+void Scene3DRenderer::SetContrast(float v) {
+  contrast_ = std::clamp(v, 0.2f, 3.0f);
+  refreshColors();
+}
+
+void Scene3DRenderer::ApplyLightPreset(int idx) {
+  switch (idx) {
+    case 1:  // 明亮：适合暗色底图
+      ambient_ = 0.65f;
+      elevation_ = 55.0f;
+      azimuth_ = 315.0f;
+      brightness_ = 1.25f;
+      contrast_ = 0.9f;
+      break;
+    case 2:  // 强立体：起伏明显
+      ambient_ = 0.22f;
+      elevation_ = 32.0f;
+      azimuth_ = 315.0f;
+      brightness_ = 1.1f;
+      contrast_ = 1.3f;
+      break;
+    case 3:  // 柔和：看整体形态
+      ambient_ = 0.5f;
+      elevation_ = 60.0f;
+      azimuth_ = 315.0f;
+      brightness_ = 1.05f;
+      contrast_ = 0.95f;
+      break;
+    default:  // 0 默认
+      ambient_ = 0.35f;
+      elevation_ = 45.0f;
+      azimuth_ = 315.0f;
+      brightness_ = 1.0f;
+      contrast_ = 1.0f;
+      break;
+  }
+  refreshColors();
+  qDebug() << "[light] preset" << idx << "amb" << ambient_ << "el" << elevation_
+           << "bri" << brightness_ << "con" << contrast_;
 }

@@ -9,6 +9,7 @@ DownloadContext::DownloadContext(QNetworkAccessManager* nam, QObject* parent)
 
 void DownloadContext::start(const QVector<TileRequest>& reqs,
                             TileCallback tileCb, DoneCallback doneCb) {
+  // 先保存本批次回调和计数器，再提交所有异步网络请求。
   tileCb_ = std::move(tileCb);
   doneCb_ = std::move(doneCb);
   total_.storeRelease(reqs.size());
@@ -33,6 +34,7 @@ void DownloadContext::onFinished(QNetworkReply* reply) {
   if (!reply) return;
   reply->deleteLater();
 
+  // 从请求属性恢复元数据，使回调能够知道返回数据对应的瓦片位置和图层。
   TileRequest tr =
       reply->request().attribute(QNetworkRequest::User).value<TileRequest>();
   QByteArray data = reply->readAll();
@@ -43,7 +45,8 @@ void DownloadContext::onFinished(QNetworkReply* reply) {
     qDebug() << "[TileDownloader] error:" << tr.x << tr.y << tr.z << err;
   }
 
-  // 回调直接在当前线程执行（NAM 所在线程），无需 invokeMethod
+  // QNetworkAccessManager 的 finished 信号在其所属线程触发，
+  // 因此单瓦片回调可以直接执行。
   if (tileCb_) {
     tileCb_(tr, data, err);
   }
@@ -69,7 +72,7 @@ TileDownloader::TileDownloader(QObject* parent) : QObject(parent) {
 void TileDownloader::DownloadTiles(const QVector<TileRequest>& reqs,
                                    DownloadContext::TileCallback tileCallback,
                                    DownloadContext::DoneCallback allDone) {
-  // 每次调用创建独立 Context，支持并发多组下载
+  // 每次调用创建独立上下文，支持并发下载不同批次。
   auto* ctx = new DownloadContext(nam_, this);
   ctx->start(reqs, std::move(tileCallback), std::move(allDone));
   // Context 在完成后可自行 deleteLater，或由父对象管理
