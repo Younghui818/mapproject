@@ -4,10 +4,6 @@
 #include "Scene3DRenderer.h"
 
 class TileDownloader;
-class TileStitcher;
-class DemProcessor;
-class MeshBuilder;
-
 // 3D 地图业务控件：负责把中心点/视口转换为瓦片请求，并驱动 DEM 到场景的构建。
 class Map3DWidget : public QWidget {
   Q_OBJECT
@@ -52,6 +48,8 @@ class Map3DWidget : public QWidget {
   // 额外把已保存的所有路径一起改样式
   // 将像素线宽和颜色应用到所有路径。
   void SetAllPathsStyle(int width, const QColor& color);
+  void PlayPathAnimation(int savedPathIndex);
+  int GetPathIndexById(quint64 id) const;
 
  signals:
   // 影像和 DEM 数据处理完成，3D 地形已经可以显示。
@@ -68,6 +66,7 @@ class Map3DWidget : public QWidget {
   void TerrainChanged();
   // 路径样式发生变化。
   void PathStyleChanged();
+  void SignalPathAnimationFinished();
 
  public slots:
   // 开启或关闭 3D 视图中的路径采集。
@@ -80,13 +79,8 @@ class Map3DWidget : public QWidget {
   void SlotClearAllPaths();
 
  private:
-  // 这些对象由 Map3DWidget 统一持有，分别负责渲染、网络、拼接、DEM
-  // 解码和网格生成。
-  Scene3DRenderer* renderer_;   // Qt 3D 场景渲染器
-  TileDownloader* downloader_;  // 影像和 DEM 瓦片下载器
-  TileStitcher* stitcher_;      // 将下载的影像瓦片拼接为纹理
-  DemProcessor* dem_;           // 解码 Terrarium 高程数据
-  MeshBuilder* meshBuilder_;    // 从高程数据生成网格
-
-  Map3DShowType type_ = kMap3DShowTypePoint;  // 当前请求的地形显示模式
+  // 负责显示地形及接收用户交互的渲染器。
+  Scene3DRenderer* renderer_;
+  // 负责异步获取影像和 DEM 瓦片的网络下载器。
+  TileDownloader* downloader_;
 };

@@ -409,11 +409,6 @@ void MapView::ScalePaths(double factor) {
   // 更新存储点（scene 坐标）
   for (int i = 0; i < current_path_points_.size(); ++i)
     current_path_points_[i] *= factor;
-  for (auto& list : saved_path_items_) {
-    Q_UNUSED(list);
-  }
-  // Note: saved path points are embedded in QPainterPath; we updated path
-  // above.
 }
 
 quint64 MapView::SlotSaveCurrentPath(const QString& name) {
@@ -426,7 +421,6 @@ quint64 MapView::SlotSaveCurrentPath(const QString& name) {
   saved_path_markers_.append(current_path_markers_);
   saved_path_ids_.append(id);
   saved_path_names_.append(name.isEmpty() ? QString("Path %1").arg(id) : name);
-  saved_path_lengths_m_.append(len);
 
   // 清空 current
   current_path_item_ = nullptr;
@@ -458,7 +452,6 @@ void MapView::SlotRemoveSavedPathById(quint64 id) {
   saved_path_markers_.removeAt(idx);
   saved_path_names_.removeAt(idx);
   saved_path_ids_.removeAt(idx);
-  saved_path_lengths_m_.removeAt(idx);
 
   emit SignalPathRemoved(id);
 }
@@ -507,7 +500,6 @@ void MapView::SlotClearAllPaths() {
   saved_path_markers_.clear();
   saved_path_names_.clear();
   saved_path_ids_.clear();
-  saved_path_lengths_m_.clear();
 
   // 当前路径
   if (current_path_item_) {

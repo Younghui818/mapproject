@@ -299,15 +299,11 @@ void MapMainWidget::SignalsLink() {
   connect(btn_end_path_, &QPushButton::clicked, this,
           &MapMainWidget::SlotEndPath);
 
-  // 监听 map_view 的 path saved/removed 信号
+  // 监听地图视图的路径保存信号。
   connect(map_view_, &MapView::SignalPathSaved, this,
           &MapMainWidget::SlotOnPathSaved);
-  connect(map_view_, &MapView::SignalPathRemoved, this,
-          &MapMainWidget::SlotOnPathRemoved);
   connect(w3d_widget_, &Map3DWidget::SignalPathSaved, this,
           &MapMainWidget::SlotOnPathSaved);
-  connect(w3d_widget_, &Map3DWidget::SignalPathRemoved, this,
-          &MapMainWidget::SlotOnPathRemoved);
 
   connect(btn_enter_3d_, &QPushButton::clicked, this,
           &MapMainWidget::SlotOnEnter3DClicked);
@@ -339,6 +335,14 @@ void MapMainWidget::SignalsLink() {
           &MapMainWidget::SlotPickPathColor);
   connect(cbx_apply_all_paths_, &QCheckBox::stateChanged, this,
           &MapMainWidget::SlotApplyAllPathsStyleChanged);
+  connect(w3d_widget_, &Map3DWidget::SignalPathAnimationFinished, this,
+          [this]() {
+            // 恢复所有动画按钮
+            for (auto* btn : findChildren<QPushButton*>("btnAnim")) {
+              btn->setText("▶");
+              btn->setEnabled(true);
+            }
+          });
 }
 
 void MapMainWidget::SlotUpdateMapSourceImage() {
@@ -391,26 +395,24 @@ void MapMainWidget::SlotClearAllPath() {
 void MapMainWidget::SlotEndPath() {
   // 主动结束当前路径并请求两个视图分别保存其当前路径。
   if (!map_view_) return;
-  quint64 id;
   if (btn_enter_3d_->text() == "enter 3d") {
     if (map_view_) {
-      id = map_view_->SlotSaveCurrentPath(QString());
+      map_view_->SlotSaveCurrentPath(QString());
     }
   } else {
     if (w3d_widget_) {
-      id = w3d_widget_->SlotSaveCurrentPath(QString());
+      w3d_widget_->SlotSaveCurrentPath(QString());
     }
   }
 
-  Q_UNUSED(id);
   cbx_mouse_add_point_->setChecked(false);
   // PathSaved 信号会通知并添加侧边 UI
 }
 
 void MapMainWidget::SlotOnPathSaved(quint64 id, const QString& name,
                                     double lengthMeters) {
-  // 任一视图保存路径后，在主窗口列表中创建对应的删除按钮和长度文本。
-  // 新建一行： label + delete button
+  const int rowIndex = next_row_index_++;
+
   QWidget* row = new QWidget(paths_list_widget_);
   row->setObjectName("pathRow");
 
@@ -424,28 +426,51 @@ void MapMainWidget::SlotOnPathSaved(quint64 id, const QString& name,
   lbl->setTextFormat(Qt::RichText);
   lbl->setToolTip(QString("%1 — %2 m").arg(name).arg(lengthMeters, 0, 'f', 2));
 
+  // ★ 动画按钮
+  QPushButton* btnAnim = new QPushButton("▶", row);
+  btnAnim->setObjectName("btnAnim");
+  btnAnim->setFixedSize(28, 22);
+  btnAnim->setToolTip("Play path grow animation");
+  btnAnim->setCursor(Qt::PointingHandCursor);
+
   QPushButton* del = new QPushButton("Delete", row);
   del->setObjectName("btnDelete");
+
   hl->addWidget(lbl);
   hl->addStretch();
+  hl->addWidget(btnAnim);
   hl->addWidget(del);
   paths_list_layout_->addWidget(row);
 
+  path_row_index_[id] = rowIndex;
+
+  // 删除
   connect(del, &QPushButton::clicked, this, [this, id, row]() {
     if (btn_enter_3d_->text() == "enter 3d") {
       if (map_view_) map_view_->SlotRemoveSavedPathById(id);
     } else {
       if (w3d_widget_) w3d_widget_->SlotRemoveSavedPathById(id);
     }
+    path_row_index_.remove(id);
     row->deleteLater();
   });
-}
 
-void MapMainWidget::SlotOnPathRemoved(quint64 id) {
-  // 根据路径 ID 移除主窗口列表项；2D/3D 删除信号最终汇聚到这里。
-  // 可选：若需要根据 id 找到并移除侧边 UI 行可在此实现（当前 lambda 已直接删除
-  // UI 行）
-  Q_UNUSED(id);
+  // ★ 动画按钮点击
+  connect(btnAnim, &QPushButton::clicked, this, [this, id, btnAnim]() {
+    // 找到该 path 在 saved_paths_ 中的索引
+    // 通过 Map3DWidget → Scene3DRenderer 的 saved_path_ids_ 查找
+    const int idx = w3d_widget_->GetPathIndexById(id);
+    if (idx >= 0) {
+      w3d_widget_->PlayPathAnimation(idx);
+      btnAnim->setText("⟳");
+      btnAnim->setEnabled(false);
+      // 动画结束后恢复按钮状态
+      QTimer::singleShot(2000, btnAnim, [btnAnim]() {
+        btnAnim->setText("▶");
+        btnAnim->setEnabled(true);
+      });
+    }
+  });
 }
 
 void MapMainWidget::SlotOnEnter3DClicked() {

@@ -3,7 +3,6 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QObject>
-#include <QSharedPointer>
 #include <QUrl>
 #include <QVector>
 #include <functional>

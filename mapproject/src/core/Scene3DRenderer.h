@@ -3,6 +3,7 @@
 #include <QEvent>
 #include <QImage>
 #include <QPoint>
+#include <QTimer>
 #include <QVector2D>
 #include <QVector3D>
 #include <QVector>
@@ -15,9 +16,8 @@
 #include <Qt3DRender/QPaintedTextureImage>
 #include <Qt3DRender/QPointSize>
 #include <Qt3DRender/QTexture>
+#include <Qt3DRender/QGeometryRenderer>
 #include <vector>
-
-#include "MeshBuilder.h"
 
 // 3D 地形的显示方式。点云和网格共享同一份高程数据，纹理模式用于贴图显示。
 enum Map3DShowType {
@@ -114,6 +114,9 @@ class Scene3DRenderer : public QWidget {
   void SetTileLatLonRange(double lonMin, double lonMax, double latMin,
                           double latMax);
 
+  void PlayPathAnimation(int savedPathIndex);
+  const QVector<quint64>& GetSavedPathIds() const { return saved_path_ids_; }
+
  protected:
   // 过滤嵌入式 Qt 3D 窗口的鼠标与滚轮事件。
   bool eventFilter(QObject* obj, QEvent* ev) override;
@@ -126,6 +129,7 @@ class Scene3DRenderer : public QWidget {
   void SignalPathRemoved(quint64 id);  // 已保存路径被删除时发出其唯一 ID。
   void SignalTerrainChanged();         // 地形几何或地理基准变化时发出
   void SignalPathStyleChanged();       // 路径颜色或线宽变化时发出
+  void SignalPathAnimationFinished();
 
  private:
   // 创建嵌入式 Qt 3D 窗口、根实体、相机和控制器。
@@ -266,9 +270,6 @@ class Scene3DRenderer : public QWidget {
 
   QVector<QVector<PathPointRecord>> saved_paths_;  // 替代 saved_paths_geo_
   QVector<PathPointRecord> current_path_;          // 替代 current_path_geo_
-  QVector<double> saved_path_lengths_m_;           // 已保存路径的长度，单位为米
-  bool has_geo_ = false;                           // 是否已设置有效地理原点
-
   // 当前地形局部原点（世界坐标 0,0,0 对应的经纬度）
   double origin_lat_ = 0;
   double origin_lon_ = 0;
@@ -279,4 +280,26 @@ class Scene3DRenderer : public QWidget {
   double path_width_ratio_ = 0.006;  // 自适应宽度系数，基于地形最大平面尺寸计算
   double geo_lat_ = 0.0, geo_lon_ = 0.0;  // 地理原点 WGS84 纬度/经度（度）
   int path_width_px_ = 3;  // UI 设定的路径线宽（像素），用于换算世界宽度
+
+  // ---- 路径生长动画 ----
+  QVector<QVector3D> anim_ctrl_pts_;
+  Qt3DCore::QEntity* anim_path_entity_ = nullptr;
+  QTimer* path_anim_timer_ = nullptr;
+  float path_anim_progress_ = 0.0f;  // 0→1
+  bool path_animating_ = false;
+  bool anim_is_current_ = true;
+  int anim_path_index_ = -1;
+  Qt3DRender::QGeometryRenderer* anim_geom_renderer_ = nullptr;
+  Qt3DCore::QBuffer* anim_pos_buffer_ = nullptr;
+  Qt3DCore::QBuffer* anim_col_buffer_ = nullptr;
+  Qt3DCore::QBuffer* anim_idx_buffer_ = nullptr;
+  int anim_max_verts_ = 0;
+  int anim_max_idx_ = 0;
+
+  void startPathGrowAnimation(const QVector<QVector3D>& ctrlPts,
+                              bool isCurrent = true, int savedIndex = -1);
+  void updatePathGrowFrame();
+  void onPathGrowFinished();
+  void buildAnimEntityShell();
+  void updateAnimGeometry(const QVector<QVector3D>& groundPts);
 };

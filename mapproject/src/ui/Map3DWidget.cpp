@@ -8,14 +8,10 @@
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
-#include <random>
 #include <vector>
 
-#include "DemProcessor.h"
-#include "MeshBuilder.h"
 #include "Scene3DRenderer.h"
 #include "TileDownloader.h"
-#include "TileStitcher.h"
 
 namespace {
 // ---- 构建规模上限：限制网络请求、纹理和几何数据的最大规模 ----
@@ -126,58 +122,6 @@ int AutoStep(int n, int maxCount) {
   return std::max(1, int(std::ceil(std::sqrt(double(total) / maxCount))));
 }
 
-// 多峰高斯 + 平滑噪声，生成有真实起伏的 demo 高程图
-QImage MakeDemoTerrain(int size = 256) {
-  // 生成离线演示用地形：低频噪声提供基础起伏，多个高斯峰提供山体形状。
-  const int nL = 16;  // 低频噪声网格
-  std::vector<float> grid((nL + 1) * (nL + 1));
-  std::mt19937 rng(20240610);
-  std::uniform_real_distribution<float> d(0.0f, 1.0f);
-  for (auto& v : grid) v = d(rng);
-
-  auto noise = [&](float u, float v) {
-    const float fx = u * nL, fy = v * nL;
-    int x0 = std::min(int(fx), nL - 1), y0 = std::min(int(fy), nL - 1);
-    float tx = fx - x0, ty = fy - y0;
-    tx = tx * tx * (3 - 2 * tx);
-    ty = ty * ty * (3 - 2 * ty);  // smoothstep
-    const auto at = [&](int x, int y) { return grid[y * (nL + 1) + x]; };
-    const float a = at(x0, y0), b = at(x0 + 1, y0);
-    const float c = at(x0, y0 + 1), e = at(x0 + 1, y0 + 1);
-    return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + e * tx) * ty;
-  };
-
-  struct Peak {
-    float cx, cy, r, amp;
-  };
-  const Peak peaks[] = {{0.30f, 0.32f, 0.22f, 0.85f},
-                        {0.68f, 0.25f, 0.16f, 0.60f},
-                        {0.55f, 0.70f, 0.26f, 0.95f},
-                        {0.18f, 0.78f, 0.14f, 0.45f}};
-
-  QImage img(size, size, QImage::Format_Grayscale8);
-  for (int y = 0; y < size; ++y) {
-    uchar* line = img.scanLine(y);
-    for (int x = 0; x < size; ++x) {
-      const float u = float(x) / (size - 1), v = float(y) / (size - 1);
-      float hgt = noise(u, v) * 0.30f;
-      for (const auto& p : peaks) {
-        const float dx = u - p.cx, dy = v - p.cy;
-        hgt += p.amp * std::exp(-((dx * dx + dy * dy) / (p.r * p.r)) * 2.2f);
-      }
-      line[x] = static_cast<uchar>(std::clamp(hgt, 0.0f, 1.0f) * 255.0f);
-    }
-  }
-  return img;
-}
-
-struct DemDecode {
-  std::vector<float> h;
-  int w = 0, hgt = 0;
-  float minH = 0, maxH = 0;
-  bool ok = false;
-};
-
 struct DemGrid {
   std::vector<float> h;
   int cols = 0, rows = 0;
@@ -189,35 +133,6 @@ struct DemGrid {
 
 inline float terrariumElev(QRgb p) {
   return (qRed(p) * 256.0f + qGreen(p) + qBlue(p) / 256.0f) - 32768.0f;
-}
-
-// Terrarium: elev = (R*256 + G + B/256) - 32768
-DemDecode DecodeTerrarium(const QByteArray& png) {
-  // 解码单张 Terrarium PNG，并同时统计该瓦片的最小/最大高程。
-  DemDecode d;
-  QImage img;
-  if (png.isEmpty() || !img.loadFromData(png)) {
-    qWarning() << "[dem] load failed, bytes:" << png.size();
-    return d;
-  }
-  img = img.convertToFormat(QImage::Format_RGB32);
-  d.w = img.width();
-  d.hgt = img.height();
-  d.h.resize(size_t(d.w) * d.hgt);
-  float mn = 1e30f, mx = -1e30f;
-  for (int y = 0; y < d.hgt; ++y)
-    for (int x = 0; x < d.w; ++x) {
-      const QRgb p = img.pixel(x, y);
-      const float e =
-          (qRed(p) * 256.0f + qGreen(p) + qBlue(p) / 256.0f) - 32768.0f;
-      d.h[size_t(y) * d.w + x] = e;
-      mn = std::min(mn, e);
-      mx = std::max(mx, e);
-    }
-  d.minH = mn;
-  d.maxH = mx;
-  d.ok = true;
-  return d;
 }
 
 // 多瓦片拼接：按行列摆进一张大 grid
@@ -284,9 +199,6 @@ DemGrid StitchTerrarium(const QMap<QPair<int, int>, QByteArray>& tiles, int x0,
 }
 }  // namespace
 
-// 简化：选固定 zoom 值（可改为根据 radius 计算）
-static int ChooseImageZoom(double /*radiusMeters*/) { return 11; }
-
 static QPoint LonLatToTileXY(double lat, double lon, int zoom) {
   double latRad = lat * M_PI / 180.0;
   int n = 1 << zoom;
@@ -335,20 +247,10 @@ static double MercatorRes(double lat, int zoom) {
   return 156543.03392804097 * std::cos(lat * M_PI / 180.0) / double(1 << zoom);
 }
 
-static double VisibleRadiusMeters(double centerLat, int zoom, int viewportW,
-                                  int viewportH, double cover = 1.15) {
-  const double res = MercatorRes(centerLat, zoom);  // 米/像素
-  const double halfMin = std::min(viewportW, viewportH) * 0.5;
-  return std::max(300.0, halfMin * res * cover);  // 下限 300m，防 zoom 过大
-}
-
 Map3DWidget::Map3DWidget(QWidget* parent)
     : QWidget(parent),
       renderer_(new Scene3DRenderer(this)),
-      downloader_(new TileDownloader(this)),
-      stitcher_(new TileStitcher(this)),
-      dem_(new DemProcessor(this)),
-      meshBuilder_(new MeshBuilder(this)) {
+      downloader_(new TileDownloader(this)) {
   auto* l = new QVBoxLayout(this);
   l->setContentsMargins(0, 0, 0, 0);
   l->addWidget(renderer_);
@@ -363,6 +265,8 @@ Map3DWidget::Map3DWidget(QWidget* parent)
           &Map3DWidget::TerrainChanged);
   connect(renderer_, &Scene3DRenderer::SignalPathStyleChanged, this,
           &Map3DWidget::PathStyleChanged);
+  connect(renderer_, &Scene3DRenderer::SignalPathAnimationFinished, this,
+          &Map3DWidget::SignalPathAnimationFinished);
 }
 
 Map3DWidget::~Map3DWidget() = default;
@@ -631,4 +535,16 @@ void Map3DWidget::SetPathStyle(int width, const QColor& color) {
 
 void Map3DWidget::SetAllPathsStyle(int width, const QColor& color) {
   if (renderer_) renderer_->SetAllPathsStyle(width, color);
+}
+
+void Map3DWidget::PlayPathAnimation(int savedPathIndex) {
+  if (renderer_) renderer_->PlayPathAnimation(savedPathIndex);
+}
+
+int Map3DWidget::GetPathIndexById(quint64 id) const {
+  if (!renderer_) return -1;
+  const auto& ids = renderer_->GetSavedPathIds();  // 需要加 getter
+  for (int i = 0; i < ids.size(); ++i)
+    if (ids[i] == id) return i;
+  return -1;
 }

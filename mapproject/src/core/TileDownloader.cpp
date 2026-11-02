@@ -75,6 +75,4 @@ void TileDownloader::DownloadTiles(const QVector<TileRequest>& reqs,
   // 每次调用创建独立上下文，支持并发下载不同批次。
   auto* ctx = new DownloadContext(nam_, this);
   ctx->start(reqs, std::move(tileCallback), std::move(allDone));
-  // Context 在完成后可自行 deleteLater，或由父对象管理
-  connect(ctx, &QObject::destroyed, this, [] {});  // placeholder
 }

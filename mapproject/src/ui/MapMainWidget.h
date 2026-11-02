@@ -33,8 +33,6 @@ class MapMainWidget : public QWidget {
   void SlotEndPath();
   // 任一地图视图保存路径后更新主窗口路径列表。
   void SlotOnPathSaved(quint64 id, const QString& name, double lengthMeters);
-  // 任一地图视图删除路径后同步更新主窗口路径列表。
-  void SlotOnPathRemoved(quint64 id);
   // 从当前 2D 地图视口进入 3D 地形视图。
   void SlotOnEnter3DClicked();
   // 响应点云/网格显示模式变化。
@@ -114,6 +112,10 @@ class MapMainWidget : public QWidget {
   QCheckBox* cbx_apply_all_paths_ = nullptr;  // 是否把样式应用到全部已保存路径
   int path_width_ = 3;                        // 当前共享路径线宽（像素）
   QColor path_color_ = QColor(255, 128, 0);   // 当前共享路径颜色
+
+  // pathId → 列表行索引（用于动画按钮回调）
+  QMap<quint64, int> path_row_index_;
+  int next_row_index_ = 0;
 };
 
 #endif  // MAP_MAIN_WIDGET_H_

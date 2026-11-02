@@ -157,7 +157,6 @@ class MapView : public QGraphicsView {
       saved_path_markers_;           // 各路径的顶点标记
   QVector<quint64> saved_path_ids_;  // 与其他已保存路径数组按索引对应的唯一 ID
   QVector<QString> saved_path_names_;     // 各路径的显示名称
-  QVector<double> saved_path_lengths_m_;  // 各路径的长度，单位为米
 
   QPen path_pen_;                     // 当前路径线条画笔
   QBrush marker_brush_;               // 路径点标记的填充画刷
