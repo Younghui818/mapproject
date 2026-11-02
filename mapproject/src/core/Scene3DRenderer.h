@@ -32,6 +32,7 @@ struct PathPointRecord {
   double lon;
   float height;  // 创建时的世界 Y（含夸张）
   double ref_lat;
+  double ref_lon;
 };
 
 // 使用内存 QImage 提供纹理像素数据的 Qt 3D 纹理图像实现。
@@ -60,26 +61,14 @@ class Scene3DRenderer : public QWidget {
   void SetPointStep(int step);
   // 设置网格构建采样步长，数值越大网格越稀疏。
   void SetMeshStep(int step);
-  // 开启或关闭网格线框显示。
-  void SetWireframe(bool on);
-  // 开启或关闭基于地形法线的阴影着色。
-  void SetHillshade(bool on);
-  // 设置方向光向量分量，内部会归一化该向量。
-  void SetShadeLight(float x, float y, float z);
   // 设置垂直夸张倍数，影响地形高度和路径贴地位置。
   void SetVerticalExaggeration(double k);
 
-  // 返回当前网格中的最低高程（米）。
-  double HeightMin() const { return heightMin_; }
-  // 返回当前网格中的最高高程（米）。
-  double HeightMax() const { return heightMax_; }
   // 清除当前地形、纹理和路径内容。
   void ClearAll();
 
   // 设置地形纹理图像，并更新对应的 Qt 3D 纹理对象。
   void SetTerrainTexture(const QImage& image);
-  // 移除地形纹理并恢复非纹理显示。
-  void ClearTerrainTexture();
 
   // 光照参数。角度只影响颜色计算，不会修改地形几何。
   // 设置环境光强度，输入范围为 0 到 1。
@@ -88,15 +77,12 @@ class Scene3DRenderer : public QWidget {
   void SetLightAzimuth(float deg);  // 方位角 0~360（太阳的罗盘方向）
   // 设置光源高度角，单位为度。
   void SetLightElevation(float deg);  // 高度角 0~90（越高越接近正午）
-
   // 亮度/对比度只重算颜色缓冲，不改动顶点和索引。
   // 设置颜色亮度系数，1.0 表示不调整。
   void SetBrightness(float v);  // 1.0 = 原始，>1 变亮
   // 设置颜色对比度系数，1.0 表示不调整。
   void SetContrast(float v);  // 1.0 = 原始，>1 对比更强
-
-  // 预设
-  // 按预设索引应用一组环境光、方向光和亮度参数。
+  // 预设 按预设索引应用一组环境光、方向光和亮度参数。
   void ApplyLightPreset(int idx);  // 0=默认 1=明亮 2=强立体 3=柔和
 
   // 对单个 RGB 颜色应用当前亮度和对比度设置。
@@ -106,24 +92,12 @@ class Scene3DRenderer : public QWidget {
   // 当前路径和已保存路径内部使用归一化 UV
   // 坐标，地形重建后可重新映射到世界坐标。 开始或结束当前路径的鼠标采集。
   void SetAddingPath(bool enable);
-  // 返回当前是否允许用户添加路径点。
-  bool IsAddingPath() const { return adding_path_; }
-  // 返回当前未保存路径包含的点数。
-  int CurrentPathPointCount() const { return current_path_uv_.size(); }
-
   // 保存当前路径并返回新分配的路径 ID；无有效路径时返回 0。
   quint64 SaveCurrentPath(const QString& name = QString());
   // 按 ID 删除已保存路径。
   void RemoveSavedPathById(quint64 id);
   // 删除当前路径和所有已保存路径。
   void ClearAllPaths();
-
-  // 设置新路径的颜色。
-  void SetPathColor(const QColor& c);
-  void SetPathWidth(double meters);  // <=0 表示按场景尺度自适应
-
-  // 返回所有已保存路径的当前世界坐标点集合。
-  QVector<QVector<QVector3D>> SavedPathsWorld() const;
 
   // 只影响“正在画 + 之后新建”的路径。
   // 同时设置后续新建路径的像素宽度和颜色。
@@ -145,18 +119,13 @@ class Scene3DRenderer : public QWidget {
   bool eventFilter(QObject* obj, QEvent* ev) override;
 
  signals:
-  // 用户点击地形时发出拾取到的世界坐标（米）。
-  void SignalClickedAt(double x, double y, double z);
-  // 当前路径新增点后发出当前点数。
-  void SignalPathPointAdded(int count);
-  // 路径保存完成通知；lengthMeters 为计算得到的长度（米）。
-  void SignalPathSaved(quint64 id, const QString& name, double lengthMeters);
-  // 已保存路径被删除时发出其唯一 ID。
-  void SignalPathRemoved(quint64 id);
-
-  void TerrainChanged();       // 地形几何或地理基准变化时发出
-  void PathStyleChanged();     // 路径颜色或线宽变化时发出
-  void PathGeometryChanged();  // 当前或已保存路径几何变化时发出
+  void SignalPathPointAdded(int count);  // 当前路径新增点后发出当前点数。
+  void SignalPathSaved(quint64 id, const QString& name,
+                       double lengthMeters);  // 路径保存完成通知；lengthMeters
+                                              // 为计算得到的长度（米）。
+  void SignalPathRemoved(quint64 id);  // 已保存路径被删除时发出其唯一 ID。
+  void SignalTerrainChanged();         // 地形几何或地理基准变化时发出
+  void SignalPathStyleChanged();       // 路径颜色或线宽变化时发出
 
  private:
   // 创建嵌入式 Qt 3D 窗口、根实体、相机和控制器。
@@ -184,8 +153,6 @@ class Scene3DRenderer : public QWidget {
   // 坐标换算：世界坐标、网格 UV、地理经纬度之间的转换。
   // 将世界坐标映射到归一化网格 UV 坐标。
   QVector2D WorldToGridUV(const QVector3D& w) const;
-  // 将网格 UV 坐标转换为包含地形高度的世界坐标。
-  QVector3D GridUVToWorld(const QVector2D& uv) const;
   // 在归一化 UV 位置对高程网格做插值采样。
   float HeightAtUV(float u, float v) const;
   // 将世界坐标映射到网格后采样该处地形高度。
@@ -206,19 +173,15 @@ class Scene3DRenderer : public QWidget {
   void RebuildCurrentPathEntity();
   // 使用保存的 UV 数据重新生成所有已保存路径实体。
   void RefreshAllPathEntities();
-  // 将拾取到的世界坐标点追加到当前路径及其地理坐标缓存。
-  void AppendPathPoint(const QVector3D& world);
   // UI 像素线宽 → 世界米数的换算基准
   double MetersPerWidthUnit() const;
-  // 将 WGS84 坐标转换为相对地理原点的平面世界坐标。
-  bool LatLonToWorld(double lat, double lon, QVector3D& out) const;
-  QVector3D LatLonToWorldAt(double lat, double lon, double refLat) const;
+  QVector3D LatLonToWorldAt(double lat, double lon, double refLat,
+                            double refLon) const;
   void WorldToLatLon(const QVector3D& world, double& lat, double& lon) const;
-  // 将地理坐标转换为贴合当前地形表面的世界坐标。
-  QVector3D GeoToWorld(double lat, double lon) const;
   // 根据 WGS84 经纬度序列计算路径长度（米）。
   double ComputePathLengthMeters(const QVector<PathPointRecord>& path) const;
 
+ private:
   // Qt 3D 窗口及其 QWidget 容器。
   Qt3DExtras::Qt3DWindow* view_ = nullptr;  // 负责实际渲染的 Qt 3D 窗口
   QWidget* container_ = nullptr;  // 将 Qt 3D 窗口嵌入当前 QWidget 的容器
@@ -249,9 +212,6 @@ class Scene3DRenderer : public QWidget {
   int meshStep_ = 1;                              // 网格抽样步长
   bool wireframe_ = false;                        // 是否显示网格线框
   bool hillshade_ = true;                         // 是否启用地形阴影着色
-  QVector3D lightDir_ =
-      QVector3D(0.45f, 0.78f, 0.44f).normalized();  // 单位方向光向量
-  float ambient_ = 0.35f;                           // 环境光强度，范围为 0 到 1
 
   // 纹理状态与原始图像；真正的 Qt 3D 纹理对象由 terrainTexImage_ 管理。
   bool useTexture_ = false;  // 是否在网格材质中使用地形纹理
@@ -266,14 +226,17 @@ class Scene3DRenderer : public QWidget {
   QPoint lastMousePos_;     // 最近一次鼠标位置，用于计算平移增量
   float panFactor_ = 1.2f;  // 平移速度相对于相机距离的系数
 
-  float azimuth_ = 315.0f;   // 光源方位角（度）
-  float elevation_ = 45.0f;  // 光源高度角（度）
+  QVector3D lightDir_ =
+      QVector3D(0.45f, 0.78f, 0.44f).normalized();  // 单位方向光向量
+  float ambient_ = 0.35f;                           // 环境光强度，范围为 0 到 1
+  float azimuth_ = 315.0f;                          // 光源方位角（度）
+  float elevation_ = 45.0f;                         // 光源高度角（度）
   float brightness_ = 1.0f;  // 颜色亮度系数，1 表示原始亮度
   float contrast_ = 1.0f;    // 颜色对比度系数，1 表示原始对比度
 
   MemoryTextureImage* terrainTexImage_ = nullptr;  // Qt 3D 使用的纹理图像对象
 
-  // 状态
+  // 路径相关
   bool adding_path_ = false;      // 是否处于路径采集模式
   QPoint press_pos_;              // 鼠标按下位置，用于区分点击和拖动
   bool potential_click_ = false;  // 当前鼠标按压是否仍可能判定为点击
@@ -286,7 +249,7 @@ class Scene3DRenderer : public QWidget {
   Qt3DCore::QEntity* current_path_entity_ =
       nullptr;  // 当前路径对应的 Qt 3D 实体
 
-  // 已保存路径使用平行数组，所有数组通过相同 index 对齐同一条路径。
+  // 每次新建3d模型 对应的经纬度范围，方便路径点转换到世界坐标。
   double tile_lon_min_ = 0.0;
   double tile_lon_max_ = 0.0;
   double tile_lat_min_ = 0.0;
@@ -301,6 +264,10 @@ class Scene3DRenderer : public QWidget {
   QVector<PathPointRecord> current_path_;          // 替代 current_path_geo_
   QVector<double> saved_path_lengths_m_;           // 已保存路径的长度，单位为米
   bool has_geo_ = false;                           // 是否已设置有效地理原点
+
+  // 当前地形局部原点（世界坐标 0,0,0 对应的经纬度）
+  double origin_lat_ = 0;
+  double origin_lon_ = 0;
 
   quint64 next_path_id_ = 1;        // 下一个分配给新路径的唯一 ID
   QColor path_color_{230, 60, 60};  // 当前路径颜色

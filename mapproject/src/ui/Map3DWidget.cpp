@@ -359,9 +359,9 @@ Map3DWidget::Map3DWidget(QWidget* parent)
           &Map3DWidget::SignalPathRemoved);
   connect(renderer_, &Scene3DRenderer::SignalPathPointAdded, this,
           &Map3DWidget::SignalPathPointAdded);
-  connect(renderer_, &Scene3DRenderer::TerrainChanged, this,
+  connect(renderer_, &Scene3DRenderer::SignalTerrainChanged, this,
           &Map3DWidget::TerrainChanged);
-  connect(renderer_, &Scene3DRenderer::PathStyleChanged, this,
+  connect(renderer_, &Scene3DRenderer::SignalPathStyleChanged, this,
           &Map3DWidget::PathStyleChanged);
 }
 
