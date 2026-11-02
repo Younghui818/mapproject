@@ -602,6 +602,7 @@ bool Scene3DRenderer::eventFilter(QObject* obj, QEvent* ev) {
         current_path_.append(rec);
         qDebug() << "[STORE] uv=(" << hitU << hitV << ")"
                  << "height=" << hit.y();
+        RebuildCurrentPathEntity();
       }
     }
     potential_click_ = false;
@@ -963,7 +964,7 @@ Qt3DCore::QEntity* Scene3DRenderer::BuildPathEntity(
   // 将一条世界坐标路径转换为 Qt 3D 线实体；路径宽度按场景尺度换算。
   if (pts.isEmpty() || !rootEntity_) return nullptr;
 
-  auto* ent = new Qt3DCore::QEntity(rootEntity_);
+  auto* ent = new Qt3DCore::QEntity();
   const QVector3D c(path_color_.redF(), path_color_.greenF(),
                     path_color_.blueF());
   const float halfW = PathHalfWidth();
@@ -1082,6 +1083,8 @@ Qt3DCore::QEntity* Scene3DRenderer::BuildPathEntity(
     node->addComponent(phong);
     node->addComponent(tr);
   }
+  ent->setParent(rootEntity_);  // 最后挂场景
+  if (view_) view_->requestUpdate();
   return ent;
 }
 
@@ -1101,6 +1104,12 @@ void Scene3DRenderer::SetAddingPath(bool enable) {
 }
 
 void Scene3DRenderer::RebuildCurrentPathEntity() {
+  if (!rootEntity_ || !view_ || !view_->isExposed()) {
+    QMetaObject::invokeMethod(
+        this, [this]() { RebuildCurrentPathEntity(); }, Qt::QueuedConnection);
+    return;
+  }
+
   destroyEntity(current_path_entity_);
   if (current_path_.isEmpty()) return;
 
@@ -1153,8 +1162,8 @@ void Scene3DRenderer::RebuildCurrentPathEntity() {
              << "halfD=" << float(depth_ * 0.5);
   }
   qDebug() << "╚══════════════════════════════════════════";
-
-  current_path_entity_ = BuildPathEntity(pts);
+  QVector<QVector3D> groundPts = ResamplePathOnTerrain(pts, PathLift());
+  current_path_entity_ = BuildPathEntity(groundPts);
 }
 
 void Scene3DRenderer::RefreshAllPathEntities() {
@@ -1163,14 +1172,15 @@ void Scene3DRenderer::RefreshAllPathEntities() {
   // 重建所有已保存路径
   for (int i = 0; i < saved_paths_.size(); ++i) {
     destroyEntity(saved_path_entities_[i]);
-    QVector<QVector3D> pts;
-    pts.reserve(saved_paths_[i].size());
+    // 1. 先转成控制点（只取 XZ，Y 先不管）
+    QVector<QVector3D> ctrl;
     for (const PathPointRecord& rec : saved_paths_[i]) {
       QVector3D w = LatLonToWorldAt(rec.lat, rec.lon, rec.ref_lat, rec.ref_lon);
-      w.setY(rec.height);
-      pts.push_back(w);
+      w.setY(0.0f);
+      ctrl.push_back(w);
     }
-    saved_path_entities_[i] = BuildPathEntity(pts);
+    QVector<QVector3D> groundPts = ResamplePathOnTerrain(ctrl, PathLift());
+    saved_path_entities_[i] = BuildPathEntity(groundPts);
   }
 }
 
@@ -1325,6 +1335,39 @@ void Scene3DRenderer::SetTileLatLonRange(double lonMin, double lonMax,
            << "lon range:" << lonMin << "-" << lonMax;
 }
 
+// 在 Scene3DRenderer 里加私有方法
+QVector<QVector3D> Scene3DRenderer::ResamplePathOnTerrain(
+    const QVector<QVector3D>& ctrlPts, float lift) const {
+  if (ctrlPts.size() < 2) return ctrlPts;
+
+  QVector<QVector3D> out;
+  const double maxDim = std::max(width_, depth_);
+  // 采样间距：约 1~2 米，或按地形尺寸自适应
+  const float segLen = float(std::max(1.0, maxDim * 0.002));
+
+  for (int i = 0; i < ctrlPts.size() - 1; ++i) {
+    const QVector3D a = ctrlPts[i];
+    const QVector3D b = ctrlPts[i + 1];
+    const float len = a.distanceToPoint(b);
+    const int steps = std::max(1, int(len / segLen));
+
+    for (int s = 0; s <= steps; ++s) {
+      const float t = float(s) / steps;
+      QVector3D p = a * (1.0f - t) + b * t;
+
+      // 用当前 XZ 查地形高程
+      const float h = HeightAtWorld(p);
+      p.setY(h + lift);  // ★ 关键：抬一点防 z-fighting / 埋地
+      out.append(p);
+    }
+  }
+  return out;
+}
+
+float Scene3DRenderer::PathLift() const {
+  const double maxDim = std::max(width_, depth_);
+  return float(std::max(0.1, maxDim * 0.0004));
+}
 // ---------- 切换 ----------
 
 void Scene3DRenderer::SetShowType(Map3DShowType type) {

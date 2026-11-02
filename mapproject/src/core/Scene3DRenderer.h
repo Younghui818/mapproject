@@ -180,6 +180,10 @@ class Scene3DRenderer : public QWidget {
   void WorldToLatLon(const QVector3D& world, double& lat, double& lon) const;
   // 根据 WGS84 经纬度序列计算路径长度（米）。
   double ComputePathLengthMeters(const QVector<PathPointRecord>& path) const;
+  QVector<QVector3D> ResamplePathOnTerrain(const QVector<QVector3D>& ctrlPts,
+                                           float lift = 0.15f) const;
+
+  float PathLift() const;
 
  private:
   // Qt 3D 窗口及其 QWidget 容器。
