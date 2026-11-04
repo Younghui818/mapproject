@@ -1,4 +1,5 @@
 #include "Scene3DRenderer.h"
+#include "Path3DManager.h"
 
 #include <QDebug>
 #include <QMatrix4x4>
@@ -27,6 +28,7 @@
 #include <Qt3DRender/QTextureImage>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace {
 struct GeoData {
@@ -282,10 +284,41 @@ void Scene3DRenderer::setupScene() {
   lightEntity->addComponent(light);
   lightEntity->addComponent(lightTransform);
 
-  connect(this, &Scene3DRenderer::SignalTerrainChanged, this,
-          &Scene3DRenderer::RefreshAllPathEntities);
-  connect(this, &Scene3DRenderer::SignalPathStyleChanged, this,
-          &Scene3DRenderer::RefreshAllPathEntities);
+  Path3DManager::Context pathContext;
+  pathContext.rootEntity = rootEntity_;
+  pathContext.view = view_;
+  pathContext.latLonToWorldAt = [this](double lat, double lon, double refLat,
+                                      double refLon) {
+    return LatLonToWorldAt(lat, lon, refLat, refLon);
+  };
+  pathContext.heightAtWorld = [this](const QVector3D& world) {
+    return HeightAtWorld(world);
+  };
+  pathContext.maxTerrainDimension = [this]() {
+    return std::max(width_, depth_);
+  };
+  pathContext.metersPerWidthUnit = [this]() {
+    const double maxDim = std::max(width_, depth_);
+    if (maxDim <= 0.0) return 1.0;
+    int height = container_ ? container_->height() : (view_ ? view_->height() : 0);
+    if (height <= 1) height = 600;
+    const double worldHeight =
+        2.0 * (maxDim * 1.25) * std::tan(22.5 * M_PI / 180.0);
+    return worldHeight / double(height);
+  };
+  path_manager_ = new Path3DManager(std::move(pathContext), this);
+  connect(this, &Scene3DRenderer::SignalTerrainChanged, path_manager_,
+          &Path3DManager::RefreshAllPathEntities);
+  connect(path_manager_, &Path3DManager::SignalPathPointAdded, this,
+          &Scene3DRenderer::SignalPathPointAdded);
+  connect(path_manager_, &Path3DManager::SignalPathSaved, this,
+          &Scene3DRenderer::SignalPathSaved);
+  connect(path_manager_, &Path3DManager::SignalPathRemoved, this,
+          &Scene3DRenderer::SignalPathRemoved);
+  connect(path_manager_, &Path3DManager::SignalPathStyleChanged, this,
+          &Scene3DRenderer::SignalPathStyleChanged);
+  connect(path_manager_, &Path3DManager::SignalPathAnimationFinished, this,
+          &Scene3DRenderer::SignalPathAnimationFinished);
   view_->setRootEntity(rootEntity_);
 
   container_->installEventFilter(this);
@@ -585,7 +618,7 @@ bool Scene3DRenderer::eventFilter(QObject* obj, QEvent* ev) {
         QVector3D hit;
         float u = -1, v = -1;
         if (PickTerrain(me->pos(), hit, u, v)) {
-          PathPointRecord rec;
+          Path3DRecord rec;
           double lat, lon;
           WorldToLatLon(hit, lat, lon);
           rec.lat = lat;
@@ -593,9 +626,7 @@ bool Scene3DRenderer::eventFilter(QObject* obj, QEvent* ev) {
           rec.height = hit.y();
           rec.ref_lat = geo_lat_;
           rec.ref_lon = geo_lon_;
-          current_path_.append(rec);
-          RebuildCurrentPathEntity();
-          emit SignalPathPointAdded(current_path_.size());
+          if (path_manager_) path_manager_->AddPoint(rec);
         }
       }
 
@@ -942,147 +973,6 @@ bool Scene3DRenderer::PickTerrain(const QPoint& localPos, QVector3D& out,
   return false;  // 点到天空/地形外
 }
 
-// ================= 路径实体 =================
-
-float Scene3DRenderer::PathHalfWidth() const {
-  const double maxDim = std::max(width_, depth_);
-  double m = path_width_m_;
-  if (m <= 0.0) m = double(path_width_px_) * MetersPerWidthUnit();
-
-  // 下限保护：极小值会让路带退化成一条线、拾取球也看不见
-  const double minM = std::max(0.05, maxDim * 0.0002);
-  return float(std::max(m, minM) * 0.5);
-}
-
-Qt3DCore::QEntity* Scene3DRenderer::BuildPathEntity(
-    const QVector<QVector3D>& pts) {
-  // 将一条世界坐标路径转换为 Qt 3D 线实体；路径宽度按场景尺度换算。
-  if (pts.isEmpty() || !rootEntity_) return nullptr;
-
-  auto* ent = new Qt3DCore::QEntity();
-  const QVector3D c(path_color_.redF(), path_color_.greenF(),
-                    path_color_.blueF());
-  const float halfW = PathHalfWidth();
-
-  // ---- 1) 贴地路带：沿路径左右各偏移 halfW，构成三角带 ----
-  if (pts.size() >= 2) {
-    const int n = pts.size();
-    std::vector<QVector3D> pos, clr;
-    std::vector<unsigned int> idx;
-    pos.reserve(size_t(n) * 2);
-    clr.reserve(size_t(n) * 2);
-
-    QVector<QVector3D> L(n), R(n);
-    for (int i = 0; i < n; ++i) {
-      QVector3D d;
-      if (i == 0)
-        d = pts[1] - pts[0];
-      else if (i == n - 1)
-        d = pts[n - 1] - pts[n - 2];
-      else
-        d = pts[i + 1] - pts[i - 1];
-      d.setY(0.0f);
-      if (d.lengthSquared() < 1e-12f) d = QVector3D(1.0f, 0.0f, 0.0f);
-      d.normalize();
-      const QVector3D nx(-d.z(), 0.0f, d.x());  // XZ 平面内的横向
-      L[i] = pts[i] + nx * halfW;
-      R[i] = pts[i] - nx * halfW;
-    }
-    for (int i = 0; i < n; ++i) {
-      pos.push_back(L[i]);
-      clr.push_back(c);
-      pos.push_back(R[i]);
-      clr.push_back(c);
-    }
-    for (int i = 0; i < n - 1; ++i) {
-      const unsigned a = unsigned(i * 2), b = a + 1;
-      const unsigned e = unsigned((i + 1) * 2), f = e + 1;
-      idx.insert(idx.end(), {a, b, e, b, f, e});
-    }
-
-    auto* rend = new Qt3DRender::QGeometryRenderer(ent);
-    auto* geom = new Qt3DCore::QGeometry(rend);
-
-    auto addAttr = [geom](Qt3DCore::QBuffer* buf, const QString& name, uint vs,
-                          uint cnt) {
-      auto* a = new Qt3DCore::QAttribute(geom);
-      a->setAttributeType(Qt3DCore::QAttribute::VertexAttribute);
-      a->setName(name);
-      a->setVertexBaseType(Qt3DCore::QAttribute::Float);
-      a->setVertexSize(vs);
-      a->setByteStride(0);
-      a->setCount(cnt);
-      a->setBuffer(buf);
-      return a;
-    };
-
-    auto* posBuf = new Qt3DCore::QBuffer(geom);
-    posBuf->setData(packVec3(pos));
-    auto* colBuf = new Qt3DCore::QBuffer(geom);
-    colBuf->setData(packVec3(clr));
-    geom->addAttribute(
-        addAttr(posBuf, Qt3DCore::QAttribute::defaultPositionAttributeName(), 3,
-                uint(pos.size())));
-    geom->addAttribute(
-        addAttr(colBuf, Qt3DCore::QAttribute::defaultColorAttributeName(), 3,
-                uint(clr.size())));
-
-    auto* idxBuf = new Qt3DCore::QBuffer(geom);
-    QByteArray ib;
-    ib.resize(int(idx.size() * sizeof(unsigned int)));
-    std::copy(idx.begin(), idx.end(),
-              reinterpret_cast<unsigned int*>(ib.data()));
-    idxBuf->setData(ib);
-    auto* ia = new Qt3DCore::QAttribute(geom);
-    ia->setAttributeType(Qt3DCore::QAttribute::IndexAttribute);
-    ia->setVertexBaseType(Qt3DCore::QAttribute::UnsignedInt);
-    ia->setVertexSize(1);
-    ia->setByteStride(0);
-    ia->setCount(uint(idx.size()));
-    ia->setBuffer(idxBuf);
-    geom->addAttribute(ia);
-
-    rend->setGeometry(geom);
-    rend->setPrimitiveType(Qt3DRender::QGeometryRenderer::Triangles);
-    rend->setVertexCount(int(idx.size()));
-
-    auto* mat = new Qt3DExtras::QPerVertexColorMaterial(ent);
-    if (auto* eff = mat->effect())  // 关背面剔除，正反面都能看见
-      for (auto* tech : eff->techniques())
-        for (auto* pass : tech->renderPasses()) {
-          auto* cf = new Qt3DRender::QCullFace(pass);
-          cf->setMode(Qt3DRender::QCullFace::NoCulling);
-          pass->addRenderState(cf);
-        }
-    ent->addComponent(rend);
-    ent->addComponent(mat);
-  }
-
-  // ---- 2) 顶点球标（共享 mesh + material）----
-  auto* sphere = new Qt3DExtras::QSphereMesh(ent);
-  sphere->setRings(8);
-  sphere->setSlices(12);
-  sphere->setRadius(
-      std::max(halfW * 0.9f, float(std::max(width_, depth_) * 0.0015)));
-  auto* phong = new Qt3DExtras::QPhongMaterial(ent);
-  phong->setAmbient(path_color_);
-  phong->setDiffuse(QColor(20, 20, 20));
-  phong->setSpecular(QColor(255, 255, 255));
-  phong->setShininess(20.0f);
-
-  for (const QVector3D& p : pts) {
-    auto* node = new Qt3DCore::QEntity(ent);
-    auto* tr = new Qt3DCore::QTransform(node);
-    tr->setTranslation(p);
-    node->addComponent(sphere);
-    node->addComponent(phong);
-    node->addComponent(tr);
-  }
-  ent->setParent(rootEntity_);  // 最后挂场景
-  if (view_) view_->requestUpdate();
-  return ent;
-}
-
 // ================= 路径 API =================
 
 void Scene3DRenderer::SetAddingPath(bool enable) {
@@ -1092,183 +982,32 @@ void Scene3DRenderer::SetAddingPath(bool enable) {
   mouse_owner_ = nullptr;
   if (container_)
     container_->setCursor(enable ? Qt::CrossCursor : Qt::ArrowCursor);
-  if (enable) {  // 与 2D 一致：进入绘点模式时丢弃未保存路径
-    destroyEntity(current_path_entity_);
-    current_path_.clear();
-  }
-}
-
-void Scene3DRenderer::RebuildCurrentPathEntity() {
-  destroyEntity(current_path_entity_);
-  if (current_path_.isEmpty()) return;
-
-  qDebug() << "╔══════════════════════════════════════════";
-  qDebug() << "║ [PATH-REBUILD] current_path_ points:" << current_path_.size();
-  qDebug() << "║ [PATH-REBUILD] geo_origin: lat=" << geo_lat_
-           << "lon=" << geo_lon_;
-  qDebug() << "║ [PATH-REBUILD] tile_range_valid:" << tile_range_valid_;
-  if (tile_range_valid_)
-    qDebug() << "║ [PATH-REBUILD] tile lat:" << tile_lat_min_ << "→"
-             << tile_lat_max_ << "lon:" << tile_lon_min_ << "→"
-             << tile_lon_max_;
-
-  QVector<QVector3D> pts;
-  pts.reserve(current_path_.size());
-
-  qDebug() << "[ALIGN] tile center lat/lon:"
-           << (tile_lat_min_ + tile_lat_max_) * 0.5
-           << (tile_lon_min_ + tile_lon_max_) * 0.5;
-  qDebug() << "[ALIGN] origin lat/lon:" << origin_lat_ << origin_lon_;
-  qDebug() << "[ALIGN] geo_origin lat/lon:" << geo_lat_ << geo_lon_;
-
-  for (int i = 0; i < current_path_.size(); ++i) {
-    const PathPointRecord& rec = current_path_[i];
-    QVector3D w = LatLonToWorldAt(rec.lat, rec.lon, rec.ref_lat, rec.ref_lon);
-    w.setY(rec.height);
-    pts.push_back(w);
-
-    qDebug().nospace() << "║ [PATH-REBUILD]   [" << i << "] "
-                       << "lat=" << rec.lat << " lon=" << rec.lon << " ref=("
-                       << rec.ref_lat << "," << rec.ref_lon << ")"
-                       << " → world=(" << w.x() << "," << w.y() << "," << w.z()
-                       << ")";
-  }
-
-  // 包围盒
-  if (!pts.isEmpty()) {
-    float minX = pts[0].x(), maxX = pts[0].x();
-    float minZ = pts[0].z(), maxZ = pts[0].z();
-    for (const auto& p : pts) {
-      minX = std::min(minX, p.x());
-      maxX = std::max(maxX, p.x());
-      minZ = std::min(minZ, p.z());
-      maxZ = std::max(maxZ, p.z());
-    }
-    qDebug() << "║ [PATH-REBUILD] bbox X:" << minX << "→" << maxX;
-    qDebug() << "║ [PATH-REBUILD] bbox Z:" << minZ << "→" << maxZ;
-    qDebug() << "║ [PATH-REBUILD] terrain center ~ (0, 0, 0)";
-    qDebug() << "║ [PATH-REBUILD] terrain halfW=" << float(width_ * 0.5)
-             << "halfD=" << float(depth_ * 0.5);
-  }
-  qDebug() << "╚══════════════════════════════════════════";
-  QVector<QVector3D> groundPts = ResamplePathOnTerrain(pts, PathLift());
-  current_path_entity_ = BuildPathEntity(groundPts);
-}
-
-void Scene3DRenderer::RefreshAllPathEntities() {
-  // 重建当前路径
-  RebuildCurrentPathEntity();
-  // 重建所有已保存路径
-  for (int i = 0; i < saved_paths_.size(); ++i) {
-    destroyEntity(saved_path_entities_[i]);
-    // 1. 先转成控制点（只取 XZ，Y 先不管）
-    QVector<QVector3D> ctrl;
-    for (const PathPointRecord& rec : saved_paths_[i]) {
-      QVector3D w = LatLonToWorldAt(rec.lat, rec.lon, rec.ref_lat, rec.ref_lon);
-      w.setY(0.0f);
-      ctrl.push_back(w);
-    }
-    QVector<QVector3D> groundPts = ResamplePathOnTerrain(ctrl, PathLift());
-    saved_path_entities_[i] = BuildPathEntity(groundPts);
-  }
+  if (path_manager_) path_manager_->SetAddingPath(enable);
 }
 
 quint64 Scene3DRenderer::SaveCurrentPath(const QString& name) {
-  if (current_path_.isEmpty()) return 0;
-
-  const quint64 id = next_path_id_++;
-  const double len = ComputePathLengthMeters(current_path_);
-
-  saved_paths_.append(current_path_);
-  saved_path_ids_.append(id);
-  saved_path_names_.append(name.isEmpty() ? QString("Path %1").arg(id) : name);
-  saved_path_entities_.append(current_path_entity_);
-
-  current_path_entity_ = nullptr;
-  current_path_.clear();
-  emit SignalPathSaved(id, saved_path_names_.last(), len);
-  return id;
+  return path_manager_ ? path_manager_->SaveCurrentPath(name) : 0;
 }
 
 void Scene3DRenderer::RemoveSavedPathById(quint64 id) {
-  const int idx = saved_path_ids_.indexOf(id);
-  if (idx < 0) return;
-  destroyEntity(saved_path_entities_[idx]);
-  saved_path_ids_.removeAt(idx);
-  saved_path_names_.removeAt(idx);
-  saved_path_entities_.removeAt(idx);
-  saved_paths_.removeAt(idx);
-  emit SignalPathRemoved(id);
+  if (path_manager_) path_manager_->RemoveSavedPathById(id);
 }
 
 void Scene3DRenderer::ClearAllPaths() {
-  destroyEntity(current_path_entity_);
-  current_path_.clear();
-  for (auto*& e : saved_path_entities_) destroyEntity(e);
-  saved_path_entities_.clear();
-  saved_path_ids_.clear();
-  saved_path_names_.clear();
-  saved_paths_.clear();
-
-  if (path_anim_timer_) {
-    path_anim_timer_->stop();
-    delete path_anim_timer_;
-    path_anim_timer_ = nullptr;
-  }
-  destroyEntity(anim_path_entity_);
-  anim_path_entity_ = nullptr;
-  path_animating_ = false;
-  anim_ctrl_pts_.clear();
+  if (path_manager_) path_manager_->ClearAllPaths();
 }
 
 void Scene3DRenderer::SetPathStyle(int width, const QColor& color) {
-  path_width_px_ = std::max(1, width);
-  path_color_ = color;
-  // 像素线宽换算成世界米数（路带是真实几何，必须落在米单位上）
-  path_width_m_ = double(path_width_px_) * MetersPerWidthUnit();
-
-  // 只重建"正在画"的路径；之后新建的点在 BuildPathEntity 里自动用新样式
-  RebuildCurrentPathEntity();
-  emit SignalPathStyleChanged();
+  if (path_manager_) path_manager_->SetPathStyle(width, color);
 }
 
 void Scene3DRenderer::SetAllPathsStyle(int width, const QColor& color) {
-  path_width_px_ = std::max(1, width);
-  path_color_ = color;
-  path_width_m_ = double(path_width_px_) * MetersPerWidthUnit();
-
-  // 已保存路径 + 当前路径一起重建（内部已含 RebuildCurrentPathEntity）
-  emit SignalPathStyleChanged();
+  if (path_manager_) path_manager_->SetAllPathsStyle(width, color);
 }
 
-double Scene3DRenderer::MetersPerWidthUnit() const {
-  const double maxDim = std::max(width_, depth_);
-  if (maxDim <= 0.0) return 1.0;
-
-  // 与 frameCamera() 保持一致：dist = maxDim * 1.25，FOV 45°
-  // → 取景时视口纵向覆盖的世界高度 ≈ 2 * dist * tan(22.5°)
-  int h = container_ ? container_->height() : (view_ ? view_->height() : 0);
-  if (h <= 1) h = 600;  // 与 doPan() 同一兜底值
-  const double worldH = 2.0 * (maxDim * 1.25) * std::tan(22.5 * M_PI / 180.0);
-  return worldH / double(h);
-}
-
-double Scene3DRenderer::ComputePathLengthMeters(
-    const QVector<PathPointRecord>& path) const {
-  if (path.size() < 2) return 0.0;
-  constexpr double kR = 6378137.0;
-  double len = 0;
-  for (int i = 1; i < path.size(); ++i) {
-    const double dLat = (path[i].lat - path[i - 1].lat) * M_PI / 180.0;
-    const double dLon = (path[i].lon - path[i - 1].lon) * M_PI / 180.0;
-    const double a = std::sin(dLat / 2) * std::sin(dLat / 2) +
-                     std::cos(path[i - 1].lat * M_PI / 180.0) *
-                         std::cos(path[i].lat * M_PI / 180.0) *
-                         std::sin(dLon / 2) * std::sin(dLon / 2);
-    const double c = 2 * std::atan2(std::sqrt(a), std::sqrt(1 - a));
-    len += kR * c;
-  }
-  return len;
+const QVector<quint64>& Scene3DRenderer::GetSavedPathIds() const {
+  static const QVector<quint64> emptyIds;
+  return path_manager_ ? path_manager_->GetSavedPathIds() : emptyIds;
 }
 
 void Scene3DRenderer::WorldToLatLon(const QVector3D& world, double& lat,
@@ -1294,17 +1033,9 @@ QVector3D Scene3DRenderer::LatLonToWorldAt(double lat, double lon,
 }
 
 void Scene3DRenderer::SetGeoOrigin(double lat, double lon) {
-  qDebug() << "═══════════════════════════════════════";
-  qDebug() << "[DIAG] SetGeoOrigin CALLED";
-  qDebug() << "[DIAG]   OLD geo_lat_ =" << geo_lat_ << "geo_lon_ =" << geo_lon_;
-  qDebug() << "[DIAG]   NEW lat =" << lat << "lon =" << lon;
-  qDebug() << "[DIAG]   current_path_ size =" << current_path_.size();
-  qDebug() << "[DIAG]   saved_paths_ count =" << saved_paths_.size();
   geo_lat_ = lat;
   geo_lon_ = lon;
-  qDebug() << "[DIAG]   → calling RefreshAllPathEntities()";
-  RefreshAllPathEntities();
-  qDebug() << "═══════════════════════════════════════";
+  if (path_manager_) path_manager_->RefreshAllPathEntities();
 }
 
 double Scene3DRenderer::TileXToLon(int x, int z) {
@@ -1331,39 +1062,6 @@ void Scene3DRenderer::SetTileLatLonRange(double lonMin, double lonMax,
            << "lon range:" << lonMin << "-" << lonMax;
 }
 
-// 在 Scene3DRenderer 里加私有方法
-QVector<QVector3D> Scene3DRenderer::ResamplePathOnTerrain(
-    const QVector<QVector3D>& ctrlPts, float lift) const {
-  if (ctrlPts.size() < 2) return ctrlPts;
-
-  QVector<QVector3D> out;
-  const double maxDim = std::max(width_, depth_);
-  // 采样间距：约 1~2 米，或按地形尺寸自适应
-  const float segLen = float(std::max(1.0, maxDim * 0.002));
-
-  for (int i = 0; i < ctrlPts.size() - 1; ++i) {
-    const QVector3D a = ctrlPts[i];
-    const QVector3D b = ctrlPts[i + 1];
-    const float len = a.distanceToPoint(b);
-    const int steps = std::max(1, int(len / segLen));
-
-    for (int s = 0; s <= steps; ++s) {
-      const float t = float(s) / steps;
-      QVector3D p = a * (1.0f - t) + b * t;
-
-      // 用当前 XZ 查地形高程
-      const float h = HeightAtWorld(p);
-      p.setY(h + lift);  // ★ 关键：抬一点防 z-fighting / 埋地
-      out.append(p);
-    }
-  }
-  return out;
-}
-
-float Scene3DRenderer::PathLift() const {
-  const double maxDim = std::max(width_, depth_);
-  return float(std::max(0.1, maxDim * 0.0004));
-}
 // ---------- 切换 ----------
 
 void Scene3DRenderer::SetShowType(Map3DShowType type) {
@@ -1399,314 +1097,8 @@ void Scene3DRenderer::rebuild() {
 }
 
 
-void Scene3DRenderer::startPathGrowAnimation(const QVector<QVector3D>& ctrlPts,
-                                             bool isCurrent, int savedIndex) {
-  if (ctrlPts.size() < 2) return;
-
-  // 停掉旧动画
-  if (path_anim_timer_) {
-    path_anim_timer_->stop();
-    delete path_anim_timer_;
-    path_anim_timer_ = nullptr;
-  }
-
-  // ★ 不再每帧 delete entity，只清理旧壳
-  if (anim_path_entity_) {
-    anim_path_entity_->setEnabled(false);
-    anim_path_entity_->deleteLater();
-    anim_path_entity_ = nullptr;
-  }
-  anim_geom_renderer_ = nullptr;
-  anim_pos_buffer_ = nullptr;
-  anim_col_buffer_ = nullptr;
-  anim_idx_buffer_ = nullptr;
-
-  anim_ctrl_pts_ = ctrlPts;
-  path_anim_progress_ = 0.0f;
-  path_animating_ = true;
-  anim_is_current_ = isCurrent;
-  anim_path_index_ = savedIndex;
-
-  // 隐藏正式 entity
-  if (isCurrent) {
-    destroyEntity(current_path_entity_);
-    current_path_entity_ = nullptr;
-  } else if (savedIndex >= 0 && savedIndex < saved_path_entities_.size()) {
-    destroyEntity(saved_path_entities_[savedIndex]);
-    saved_path_entities_[savedIndex] = nullptr;
-  }
-
-  path_anim_timer_ = new QTimer(this);
-  connect(path_anim_timer_, &QTimer::timeout, this, [this]() {
-    const float speed = 1.0f / 60.0f;
-    path_anim_progress_ += speed;
-    if (path_anim_progress_ >= 1.0f) {
-      path_anim_progress_ = 1.0f;
-      updatePathGrowFrame();
-      path_anim_timer_->stop();
-      delete path_anim_timer_;
-      path_anim_timer_ = nullptr;
-      onPathGrowFinished();
-      return;
-    }
-    updatePathGrowFrame();
-  });
-  path_anim_timer_->start(50);
-}
-
-void Scene3DRenderer::updatePathGrowFrame() {
-  if (anim_ctrl_pts_.size() < 2) return;
-
-  const int totalSegments = anim_ctrl_pts_.size() - 1;
-  const float scaledT = path_anim_progress_ * float(totalSegments);
-  const int visibleSegments = int(std::floor(scaledT));
-  const float segmentT = scaledT - float(visibleSegments);
-
-  if (visibleSegments < 0) return;
-
-  QVector<QVector3D> visible;
-  const int maxVisible = std::min(visibleSegments + 1, totalSegments + 1);
-  for (int i = 0; i < maxVisible; ++i) visible.append(anim_ctrl_pts_[i]);
-
-  if (visibleSegments < totalSegments) {
-    const QVector3D& a = anim_ctrl_pts_[visibleSegments];
-    const QVector3D& b = anim_ctrl_pts_[visibleSegments + 1];
-    visible.append(a * (1.0f - segmentT) + b * segmentT);
-  }
-
-  if (visible.size() < 2) return;
-
-  QVector<QVector3D> groundPts = ResamplePathOnTerrain(visible, PathLift());
-
-  // ★ 第一次调用时建空壳
-  if (!anim_path_entity_) {
-    buildAnimEntityShell();
-  }
-
-  // ★ 只更新 buffer，不重建 entity
-  updateAnimGeometry(groundPts);
-}
-
-void Scene3DRenderer::onPathGrowFinished() {
-  path_animating_ = false;
-
-  // ★ 动画结束，安全销毁空壳
-  if (anim_path_entity_) {
-    anim_path_entity_->setEnabled(false);
-    anim_path_entity_->deleteLater();
-    anim_path_entity_ = nullptr;
-  }
-  anim_geom_renderer_ = nullptr;
-  anim_pos_buffer_ = nullptr;
-  anim_col_buffer_ = nullptr;
-  anim_idx_buffer_ = nullptr;
-
-  if (anim_is_current_) {
-    RebuildCurrentPathEntity();
-  } else if (anim_path_index_ >= 0 && anim_path_index_ < saved_paths_.size()) {
-    destroyEntity(saved_path_entities_[anim_path_index_]);
-    QVector<QVector3D> ctrl;
-    for (const PathPointRecord& rec : saved_paths_[anim_path_index_]) {
-      QVector3D w = LatLonToWorldAt(rec.lat, rec.lon, rec.ref_lat, rec.ref_lon);
-      w.setY(0.0f);
-      ctrl.push_back(w);
-    }
-    QVector<QVector3D> groundPts = ResamplePathOnTerrain(ctrl, PathLift());
-    saved_path_entities_[anim_path_index_] = BuildPathEntity(groundPts);
-  }
-  emit SignalPathAnimationFinished();
-}
-
 void Scene3DRenderer::PlayPathAnimation(int savedPathIndex) {
-  if (savedPathIndex < 0 || savedPathIndex >= saved_paths_.size()) return;
-  QVector<QVector3D> ctrl;
-  for (const PathPointRecord& rec : saved_paths_[savedPathIndex]) {
-    QVector3D w = LatLonToWorldAt(rec.lat, rec.lon, rec.ref_lat, rec.ref_lon);
-    w.setY(0.0f);
-    ctrl.push_back(w);
-  }
-  startPathGrowAnimation(ctrl, false, savedPathIndex);
-}
-void Scene3DRenderer::buildAnimEntityShell() {
-  if (!rootEntity_) return;
-
-  const int totalSegs = anim_ctrl_pts_.size() - 1;
-  const double maxDim = std::max(width_, depth_);
-  const float segLen = float(std::max(1.0, maxDim * 0.002));
-
-  // 估算每段最大采样点数
-  float maxSegWorldLen = 0;
-  for (int i = 0; i < totalSegs; ++i)
-    maxSegWorldLen =
-        std::max(maxSegWorldLen,
-                 anim_ctrl_pts_[i].distanceToPoint(anim_ctrl_pts_[i + 1]));
-  const int maxStepsPerSeg = std::max(1, int(maxSegWorldLen / segLen));
-
-  // 预留容量：每段最多 (maxStepsPerSeg+1) 个采样点
-  anim_max_verts_ = (totalSegs * (maxStepsPerSeg + 1) + 1) * 2;
-  anim_max_idx_ = totalSegs * (maxStepsPerSeg + 1) * 6;
-
-  anim_path_entity_ = new Qt3DCore::QEntity(rootEntity_);
-  anim_geom_renderer_ = new Qt3DRender::QGeometryRenderer(anim_path_entity_);
-  auto* geom = new Qt3DCore::QGeometry(anim_geom_renderer_);
-
-  // Position buffer
-  anim_pos_buffer_ = new Qt3DCore::QBuffer(geom);
-  {
-    QByteArray d;
-    d.resize(anim_max_verts_ * 3 * sizeof(float));
-    d.fill(0);
-    anim_pos_buffer_->setData(d);
-  }
-  auto* posAttr = new Qt3DCore::QAttribute(geom);
-  posAttr->setAttributeType(Qt3DCore::QAttribute::VertexAttribute);
-  posAttr->setName(Qt3DCore::QAttribute::defaultPositionAttributeName());
-  posAttr->setVertexBaseType(Qt3DCore::QAttribute::Float);
-  posAttr->setVertexSize(3);
-  posAttr->setByteStride(3 * sizeof(float));
-  posAttr->setCount(0);
-  posAttr->setBuffer(anim_pos_buffer_);
-  geom->addAttribute(posAttr);
-
-  // Color buffer
-  anim_col_buffer_ = new Qt3DCore::QBuffer(geom);
-  {
-    QByteArray d;
-    d.resize(anim_max_verts_ * 3 * sizeof(float));
-    d.fill(0);
-    anim_col_buffer_->setData(d);
-  }
-  auto* colAttr = new Qt3DCore::QAttribute(geom);
-  colAttr->setAttributeType(Qt3DCore::QAttribute::VertexAttribute);
-  colAttr->setName(Qt3DCore::QAttribute::defaultColorAttributeName());
-  colAttr->setVertexBaseType(Qt3DCore::QAttribute::Float);
-  colAttr->setVertexSize(3);
-  colAttr->setByteStride(3 * sizeof(float));
-  colAttr->setCount(0);
-  colAttr->setBuffer(anim_col_buffer_);
-  geom->addAttribute(colAttr);
-
-  // Index buffer
-  anim_idx_buffer_ = new Qt3DCore::QBuffer(geom);
-  {
-    QByteArray d;
-    d.resize(anim_max_idx_ * sizeof(unsigned int));
-    d.fill(0);
-    anim_idx_buffer_->setData(d);
-  }
-  auto* idxAttr = new Qt3DCore::QAttribute(geom);
-  idxAttr->setAttributeType(Qt3DCore::QAttribute::IndexAttribute);
-  idxAttr->setVertexBaseType(Qt3DCore::QAttribute::UnsignedInt);
-  idxAttr->setVertexSize(1);
-  idxAttr->setByteStride(sizeof(unsigned int));
-  idxAttr->setCount(0);
-  idxAttr->setBuffer(anim_idx_buffer_);
-  geom->addAttribute(idxAttr);
-
-  anim_geom_renderer_->setGeometry(geom);
-  anim_geom_renderer_->setPrimitiveType(
-      Qt3DRender::QGeometryRenderer::Triangles);
-  anim_geom_renderer_->setVertexCount(0);
-
-  auto* mat = new Qt3DExtras::QPerVertexColorMaterial(anim_path_entity_);
-  // 关背面剔除
-  if (auto* eff = mat->effect())
-    for (auto* tech : eff->techniques())
-      for (auto* pass : tech->renderPasses()) {
-        auto* cf = new Qt3DRender::QCullFace(pass);
-        cf->setMode(Qt3DRender::QCullFace::NoCulling);
-        pass->addRenderState(cf);
-      }
-
-  anim_path_entity_->addComponent(anim_geom_renderer_);
-  anim_path_entity_->addComponent(mat);
-}
-void Scene3DRenderer::updateAnimGeometry(const QVector<QVector3D>& groundPts) {
-  if (!anim_path_entity_ || groundPts.size() < 2) return;
-
-  const int n = groundPts.size();
-  const QVector3D c(path_color_.redF(), path_color_.greenF(),
-                    path_color_.blueF());
-  const float halfW = PathHalfWidth();
-
-  std::vector<QVector3D> pos, clr;
-  std::vector<unsigned int> idx;
-  pos.reserve(size_t(n) * 2);
-  clr.reserve(size_t(n) * 2);
-
-  QVector<QVector3D> L(n), R(n);
-  for (int i = 0; i < n; ++i) {
-    QVector3D d;
-    if (i == 0)
-      d = groundPts[1] - groundPts[0];
-    else if (i == n - 1)
-      d = groundPts[n - 1] - groundPts[n - 2];
-    else
-      d = groundPts[i + 1] - groundPts[i - 1];
-    d.setY(0.0f);
-    if (d.lengthSquared() < 1e-12f) d = QVector3D(1.0f, 0.0f, 0.0f);
-    d.normalize();
-    const QVector3D nx(-d.z(), 0.0f, d.x());
-    L[i] = groundPts[i] + nx * halfW;
-    R[i] = groundPts[i] - nx * halfW;
-  }
-  for (int i = 0; i < n; ++i) {
-    pos.push_back(L[i]);
-    clr.push_back(c);
-    pos.push_back(R[i]);
-    clr.push_back(c);
-  }
-  for (int i = 0; i < n - 1; ++i) {
-    const unsigned a = unsigned(i * 2), b = a + 1;
-    const unsigned e = unsigned((i + 1) * 2), f = e + 1;
-    idx.insert(idx.end(), {a, b, e, b, f, e});
-  }
-
-  // 更新 position buffer
-  {
-    QByteArray d;
-    d.resize(int(pos.size()) * 3 * sizeof(float));
-    float* dst = reinterpret_cast<float*>(d.data());
-    for (size_t i = 0; i < pos.size(); ++i) {
-      dst[i * 3 + 0] = pos[i].x();
-      dst[i * 3 + 1] = pos[i].y();
-      dst[i * 3 + 2] = pos[i].z();
-    }
-    anim_pos_buffer_->setData(d);
-  }
-
-  // 更新 color buffer
-  {
-    QByteArray d;
-    d.resize(int(clr.size()) * 3 * sizeof(float));
-    float* dst = reinterpret_cast<float*>(d.data());
-    for (size_t i = 0; i < clr.size(); ++i) {
-      dst[i * 3 + 0] = clr[i].x();
-      dst[i * 3 + 1] = clr[i].y();
-      dst[i * 3 + 2] = clr[i].z();
-    }
-    anim_col_buffer_->setData(d);
-  }
-
-  // 更新 index buffer
-  {
-    QByteArray d;
-    d.resize(int(idx.size()) * sizeof(unsigned int));
-    std::copy(idx.begin(), idx.end(),
-              reinterpret_cast<unsigned int*>(d.data()));
-    anim_idx_buffer_->setData(d);
-  }
-
-  // 更新 attribute count
-  for (auto* attr : anim_geom_renderer_->geometry()->attributes()) {
-    if (attr->attributeType() == Qt3DCore::QAttribute::IndexAttribute)
-      attr->setCount(uint(idx.size()));
-    else
-      attr->setCount(uint(pos.size()));
-  }
-  anim_geom_renderer_->setVertexCount(int(idx.size()));
-
-  if (view_) view_->requestUpdate();
+  if (path_manager_) path_manager_->PlayPathAnimation(savedPathIndex);
 }
 void Scene3DRenderer::SetPointStep(int step) {
   step = std::max(1, step);
