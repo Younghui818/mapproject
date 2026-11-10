@@ -1,5 +1,4 @@
 #include "Scene3DRenderer.h"
-#include "Path3DManager.h"
 
 #include <QDebug>
 #include <QMatrix4x4>
@@ -29,6 +28,8 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+
+#include "Path3DManager.h"
 
 namespace {
 struct GeoData {
@@ -288,7 +289,7 @@ void Scene3DRenderer::setupScene() {
   pathContext.rootEntity = rootEntity_;
   pathContext.view = view_;
   pathContext.latLonToWorldAt = [this](double lat, double lon, double refLat,
-                                      double refLon) {
+                                       double refLon) {
     return LatLonToWorldAt(lat, lon, refLat, refLon);
   };
   pathContext.heightAtWorld = [this](const QVector3D& world) {
@@ -300,7 +301,8 @@ void Scene3DRenderer::setupScene() {
   pathContext.metersPerWidthUnit = [this]() {
     const double maxDim = std::max(width_, depth_);
     if (maxDim <= 0.0) return 1.0;
-    int height = container_ ? container_->height() : (view_ ? view_->height() : 0);
+    int height =
+        container_ ? container_->height() : (view_ ? view_->height() : 0);
     if (height <= 1) height = 600;
     const double worldHeight =
         2.0 * (maxDim * 1.25) * std::tan(22.5 * M_PI / 180.0);
@@ -1096,10 +1098,10 @@ void Scene3DRenderer::rebuild() {
   emit SignalTerrainChanged();
 }
 
-
 void Scene3DRenderer::PlayPathAnimation(int savedPathIndex) {
   if (path_manager_) path_manager_->PlayPathAnimation(savedPathIndex);
 }
+
 void Scene3DRenderer::SetPointStep(int step) {
   step = std::max(1, step);
   if (pointStep_ == step) return;
@@ -1189,4 +1191,17 @@ void Scene3DRenderer::ApplyLightPreset(int idx) {
   refreshColors();
   qDebug() << "[light] preset" << idx << "amb" << ambient_ << "el" << elevation_
            << "bri" << brightness_ << "con" << contrast_;
+}
+
+bool Scene3DRenderer::ExportPaths(const QVector<quint64>& ids,
+                                  const QString& filePath,
+                                  ExportFormat format) {
+  if (!path_manager_) return false;
+  return path_manager_->ExportPaths(ids, filePath, format);
+}
+
+int Scene3DRenderer::ImportPaths(const QString& filePath,
+                                 QVector<quint64>& outIds) {
+  if (!path_manager_) return 0;
+  return path_manager_->ImportPaths(filePath, outIds);
 }

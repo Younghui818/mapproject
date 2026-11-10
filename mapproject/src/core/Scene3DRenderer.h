@@ -16,6 +16,7 @@
 #include <Qt3DRender/QPointSize>
 #include <Qt3DRender/QTexture>
 #include <vector>
+#include "Path3DRecord.h"
 
 class Path3DManager;
 
@@ -107,6 +108,9 @@ class Scene3DRenderer : public QWidget {
 
   void PlayPathAnimation(int savedPathIndex);
   const QVector<quint64>& GetSavedPathIds() const;
+  bool ExportPaths(const QVector<quint64>& ids, const QString& filePath,
+                   ExportFormat format = ExportFormat::JSON);
+  int ImportPaths(const QString& filePath, QVector<quint64>& outIds);
 
  protected:
   // 过滤嵌入式 Qt 3D 窗口的鼠标与滚轮事件。
@@ -190,11 +194,11 @@ class Scene3DRenderer : public QWidget {
          depth_ = 100.0;       // 地形平面范围，分别对应 X/Z 方向（米）
   double exaggeration_ = 1.0;  // 高程垂直夸张倍数
 
-  Map3DShowType showType_ = kMap3DShowTypePoint;  // 当前地形显示模式
-  int pointStep_ = 1;                             // 点云抽样步长
-  int meshStep_ = 1;                              // 网格抽样步长
-  bool wireframe_ = false;                        // 是否显示网格线框
-  bool hillshade_ = true;                         // 是否启用地形阴影着色
+  Map3DShowType showType_ = kMap3DShowTypeMesh;  // 当前地形显示模式
+  int pointStep_ = 1;                            // 点云抽样步长
+  int meshStep_ = 1;                             // 网格抽样步长
+  bool wireframe_ = false;                       // 是否显示网格线框
+  bool hillshade_ = true;                        // 是否启用地形阴影着色
 
   // 纹理状态与原始图像；真正的 Qt 3D 纹理对象由 terrainTexImage_ 管理。
   bool useTexture_ = false;  // 是否在网格材质中使用地形纹理

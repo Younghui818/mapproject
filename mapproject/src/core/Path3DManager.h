@@ -3,8 +3,8 @@
 #include <QColor>
 #include <QObject>
 #include <QString>
-#include <QVector>
 #include <QVector3D>
+#include <QVector>
 #include <functional>
 
 #include "Path3DRecord.h"
@@ -12,7 +12,7 @@
 namespace Qt3DCore {
 class QBuffer;
 class QEntity;
-}
+}  // namespace Qt3DCore
 
 namespace Qt3DExtras {
 class Qt3DWindow;
@@ -29,12 +29,12 @@ class Path3DManager : public QObject {
 
  public:
   struct Context {
-	Qt3DCore::QEntity* rootEntity = nullptr;
-	Qt3DExtras::Qt3DWindow* view = nullptr;
-	std::function<QVector3D(double, double, double, double)> latLonToWorldAt;
-	std::function<float(const QVector3D&)> heightAtWorld;
-	std::function<double()> maxTerrainDimension;
-	std::function<double()> metersPerWidthUnit;
+    Qt3DCore::QEntity* rootEntity = nullptr;
+    Qt3DExtras::Qt3DWindow* view = nullptr;
+    std::function<QVector3D(double, double, double, double)> latLonToWorldAt;
+    std::function<float(const QVector3D&)> heightAtWorld;
+    std::function<double()> maxTerrainDimension;
+    std::function<double()> metersPerWidthUnit;
   };
 
   explicit Path3DManager(Context context, QObject* parent = nullptr);
@@ -50,6 +50,10 @@ class Path3DManager : public QObject {
   void RefreshAllPathEntities();
 
   const QVector<quint64>& GetSavedPathIds() const { return saved_path_ids_; }
+  // 导出指定路径
+  bool ExportPaths(const QVector<quint64>& ids, const QString& filePath,
+                   ExportFormat format = ExportFormat::JSON);
+  int ImportPaths(const QString& filePath, QVector<quint64>& outIds);
 
  signals:
   void SignalPathPointAdded(int count);
@@ -65,13 +69,13 @@ class Path3DManager : public QObject {
   double MetersPerWidthUnit() const;
   double ComputePathLengthMeters(const QVector<Path3DRecord>& path) const;
   QVector<QVector3D> ResamplePathOnTerrain(
-	  const QVector<QVector3D>& controlPoints, float lift) const;
-  QVector<QVector3D> PathPointsToWorld(
-	  const QVector<Path3DRecord>& path, bool keepHeight) const;
+      const QVector<QVector3D>& controlPoints, float lift) const;
+  QVector<QVector3D> PathPointsToWorld(const QVector<Path3DRecord>& path,
+                                       bool keepHeight) const;
   Qt3DCore::QEntity* BuildPathEntity(const QVector<QVector3D>& points);
   void RebuildCurrentPathEntity();
   void startPathGrowAnimation(const QVector<QVector3D>& controlPoints,
-							  bool isCurrent = true, int savedIndex = -1);
+                              bool isCurrent = true, int savedIndex = -1);
   void updatePathGrowFrame();
   void onPathGrowFinished();
   void buildAnimEntityShell();

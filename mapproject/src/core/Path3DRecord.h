@@ -7,3 +7,5 @@ struct Path3DRecord {
   double ref_lat;
   double ref_lon;
 };
+
+enum class ExportFormat { JSON };

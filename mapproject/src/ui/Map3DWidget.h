@@ -50,6 +50,9 @@ class Map3DWidget : public QWidget {
   void SetAllPathsStyle(int width, const QColor& color);
   void PlayPathAnimation(int savedPathIndex);
   int GetPathIndexById(quint64 id) const;
+  bool ExportPaths(const QVector<quint64>& ids, const QString& filePath,
+                   ExportFormat format = ExportFormat::JSON);
+  int ImportPaths(const QString& filePath, QVector<quint64>& outIds);
 
  signals:
   // 影像和 DEM 数据处理完成，3D 地形已经可以显示。
@@ -83,4 +86,8 @@ class Map3DWidget : public QWidget {
   Scene3DRenderer* renderer_;
   // 负责异步获取影像和 DEM 瓦片的网络下载器。
   TileDownloader* downloader_;
+  Map3DShowType type_ = kMap3DShowTypeMesh;
+  QSharedPointer<QMap<QPair<int, int>, QByteArray>> last_img_shared_;
+  QSharedPointer<QMap<QPair<int, int>, QByteArray>> last_cia_shared_;
+  int last_dx0_, last_dy0_, last_dx1_, last_dy1_;
 };

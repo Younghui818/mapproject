@@ -310,7 +310,7 @@ void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
   qDebug() << "[dem] z" << demZ << "tiles" << cntX << "x" << cntY << "range x["
            << dx0 << "," << dx1 << "] y[" << dy0 << "," << dy1 << "]";
 
-// ★ 正确：用 dx0/dx1/dy0/dy1/demZ
+  // ★ 正确：用 dx0/dx1/dy0/dy1/demZ
   renderer_->SetTileLatLonRange(
       Scene3DRenderer::TileXToLon(dx0, demZ),
       Scene3DRenderer::TileXToLon(dx1 + 1, demZ),
@@ -398,7 +398,6 @@ void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
       });
 
   if constexpr (kAlsoFetchImagery) {
-    constexpr bool kWithLabel = true;
     auto imgShared =
         QSharedPointer<QMap<QPair<int, int>, QByteArray>>::create();
     auto ciaShared =
@@ -415,16 +414,20 @@ void Map3DWidget::Build3DFromCenter(double centerLat, double centerLon,
         r.layer = 0;
         r.url = QUrl(TdtImgUrl(demZ, tx, ty));
         imgReqs.append(r);
-        if constexpr (kWithLabel) {
-          TileRequest c = r;
-          c.url = QUrl(TdtCiaUrl(demZ, tx, ty));
-          ciaReqs.append(c);
-        }
+        TileRequest c = r;
+        c.url = QUrl(TdtCiaUrl(demZ, tx, ty));
+        ciaReqs.append(c);
       }
 
     auto applyTexture = [this, imgShared, ciaShared, dx0, dy0, dx1, dy1]() {
-      QImage tex =
-          StitchImagery(*imgShared, *ciaShared, dx0, dy0, dx1, dy1, kWithLabel);
+      last_img_shared_ = imgShared;
+      last_cia_shared_ = ciaShared;
+      last_dx0_ = dx0;
+      last_dy0_ = dy0;
+      last_dx1_ = dx1;
+      last_dy1_ = dy1;
+      QImage tex = StitchImagery(*imgShared, *ciaShared, dx0, dy0, dx1, dy1,
+                                 type_ == kMap3DShowTypeTexture);
       if (tex.isNull()) {
         qWarning() << "[img] no imagery";
         return;
@@ -466,10 +469,28 @@ void Map3DWidget::SetDemExaggeration(double k) {
 
 void Map3DWidget::UpdateMap3DShowType(Map3DShowType type) {
   // UI 选择点云/网格后转发给渲染器，并记录当前模式。
-  if (!renderer_) {
+  // 如果时点云和网格之间的切换则重建 如果是网格和贴图之间的切换
+  // 则仅更新贴图注记信息
+  if ((type_ == kMap3DShowTypePoint) != (type == kMap3DShowTypePoint)) {
+    if (!renderer_) {
+      return;
+    }
+    renderer_->SetShowType(type);
+    type_ = type;
     return;
   }
-  renderer_->SetShowType(type);
+
+  type_ = type;
+  if (type != kMap3DShowTypePoint) {
+    if (!last_img_shared_.isNull() && !last_cia_shared_.isNull()) {
+      QImage tex = StitchImagery(*last_img_shared_, *last_cia_shared_,
+                                 last_dx0_, last_dy0_, last_dx1_, last_dy1_,
+                                 type == kMap3DShowTypeTexture);
+      if (!tex.isNull()) {
+        renderer_->SetTerrainTexture(tex);
+      }
+    }
+  }
 }
 
 void Map3DWidget::Build3DFromView(double centerLat, double centerLon,
@@ -547,4 +568,16 @@ int Map3DWidget::GetPathIndexById(quint64 id) const {
   for (int i = 0; i < ids.size(); ++i)
     if (ids[i] == id) return i;
   return -1;
+}
+
+bool Map3DWidget::ExportPaths(const QVector<quint64>& ids,
+                              const QString& filePath, ExportFormat format) {
+  if (!renderer_) return false;
+  return renderer_->ExportPaths(ids, filePath, format);
+}
+
+int Map3DWidget::ImportPaths(const QString& filePath,
+                             QVector<quint64>& outIds) {
+  if (!renderer_) return 0;
+  return renderer_->ImportPaths(filePath, outIds);
 }
