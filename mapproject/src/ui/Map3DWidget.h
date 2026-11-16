@@ -15,8 +15,7 @@ class Map3DWidget : public QWidget {
 
   // 异步启动构建流程：下载影像和 DEM，拼接/解码后在 renderer_ 中生成地形。
   // centerLat/centerLon 为 WGS84 度数，radiusMeters 为覆盖半径（米）。
-  void Build3DFromCenter(double centerLat, double centerLon,
-                         double radiusMeters);
+  void Build3DFromCenter(double centerLat, double centerLon, double radiusMeters);
 
   // 修改显示模式，不重新下载数据。
   void UpdateMap3DShowType(Map3DShowType type);
@@ -26,8 +25,7 @@ class Map3DWidget : public QWidget {
 
   // 根据视口尺寸和米/像素比例估算覆盖半径，再复用中心点构建流程。
   // metersPerPixel 是地面分辨率，viewportW/viewportH 是视口像素尺寸。
-  void Build3DFromView(double centerLat, double centerLon,
-                       double metersPerPixel, int viewportW, int viewportH);
+  void Build3DFromView(double centerLat, double centerLon, double metersPerPixel, int viewportW, int viewportH);
 
   // 设置渲染器环境光强度，范围为 0 到 1。
   void SetAmbient(float v);
@@ -48,19 +46,16 @@ class Map3DWidget : public QWidget {
   // 额外把已保存的所有路径一起改样式
   // 将像素线宽和颜色应用到所有路径。
   void SetAllPathsStyle(int width, const QColor& color);
-  void PlayPathAnimation(int savedPathIndex);
-  int GetPathIndexById(quint64 id) const;
-  bool ExportPaths(const QVector<quint64>& ids, const QString& filePath,
-                   ExportFormat format = ExportFormat::JSON);
-  int ImportPaths(const QString& filePath, QVector<quint64>& outIds);
+
+ public:
+  // 负责显示地形及接收用户交互的渲染器。
+  Scene3DRenderer* renderer_;
 
  signals:
   // 影像和 DEM 数据处理完成，3D 地形已经可以显示。
   void SignalReady();
   // 构建流程失败时发出可读错误原因。
   void SignalFailed(const QString& reason);
-  // 3D 路径保存完成，lengthMeters 是路径长度（米）。
-  void SignalPathSaved(quint64 id, const QString& name, double lengthMeters);
   // 3D 已保存路径删除通知。
   void SignalPathRemoved(quint64 id);
   // 3D 当前路径新增点后发出点数。
@@ -82,8 +77,6 @@ class Map3DWidget : public QWidget {
   void SlotClearAllPaths();
 
  private:
-  // 负责显示地形及接收用户交互的渲染器。
-  Scene3DRenderer* renderer_;
   // 负责异步获取影像和 DEM 瓦片的网络下载器。
   TileDownloader* downloader_;
   Map3DShowType type_ = kMap3DShowTypeMesh;

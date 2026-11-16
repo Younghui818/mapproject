@@ -17,8 +17,7 @@
 #include <Qt3DRender/QTexture>
 #include <vector>
 #include "Path3DRecord.h"
-
-class Path3DManager;
+#include "Path3DManager.h"
 
 // 3D 地形的显示方式。点云和网格共享同一份高程数据，纹理模式用于贴图显示。
 enum Map3DShowType {
@@ -38,8 +37,8 @@ class Scene3DRenderer : public QWidget {
   explicit Scene3DRenderer(QWidget* parent = nullptr);
 
   // 设置行优先高程数组；cols/rows 是网格尺寸，width/depth 是平面世界尺寸。
-  void SetHeightGrid(const std::vector<float>& heights, int cols, int rows,
-                     double width, double depth);  // 真实高程（米）
+  void SetHeightGrid(const std::vector<float>& heights, int cols, int rows, double width,
+                     double depth);  // 真实高程（米）
 
   // ---- 显示切换和地形外观参数 ----
   // 设置点云、网格或纹理显示模式。
@@ -103,27 +102,20 @@ class Scene3DRenderer : public QWidget {
 
   static double TileXToLon(int x, int z);
   static double TileYToLat(int y, int z);
-  void SetTileLatLonRange(double lonMin, double lonMax, double latMin,
-                          double latMax);
+  void SetTileLatLonRange(double lonMin, double lonMax, double latMin, double latMax);
 
-  void PlayPathAnimation(int savedPathIndex);
-  const QVector<quint64>& GetSavedPathIds() const;
-  bool ExportPaths(const QVector<quint64>& ids, const QString& filePath,
-                   ExportFormat format = ExportFormat::JSON);
-  int ImportPaths(const QString& filePath, QVector<quint64>& outIds);
+ public:
+  Path3DManager* path_manager_ = nullptr;
 
  protected:
   // 过滤嵌入式 Qt 3D 窗口的鼠标与滚轮事件。
   bool eventFilter(QObject* obj, QEvent* ev) override;
 
  signals:
-  void SignalPathPointAdded(int count);  // 当前路径新增点后发出当前点数。
-  void SignalPathSaved(quint64 id, const QString& name,
-                       double lengthMeters);  // 路径保存完成通知；lengthMeters
-                                              // 为计算得到的长度（米）。
-  void SignalPathRemoved(quint64 id);  // 已保存路径被删除时发出其唯一 ID。
-  void SignalTerrainChanged();         // 地形几何或地理基准变化时发出
-  void SignalPathStyleChanged();       // 路径颜色或线宽变化时发出
+  void SignalPathPointAdded(int count);      // 当前路径新增点后发出当前点数。
+  void SignalPathRemoved(quint64 id);        // 已保存路径被删除时发出其唯一 ID。
+  void SignalTerrainChanged();               // 地形几何或地理基准变化时发出
+  void SignalPathStyleChanged();             // 路径颜色或线宽变化时发出
   void SignalPathAnimationFinished();
 
  private:
@@ -138,8 +130,7 @@ class Scene3DRenderer : public QWidget {
   // 把当前点尺寸应用到所有点大小节点。
   void applyPointSize();
   // 根据几何对象构造点云/网格实体及所需材质。
-  void makeEntity(Qt3DCore::QEntity*& ent, const void* geo, bool asPoints,
-                  bool wireframe);
+  void makeEntity(Qt3DCore::QEntity*& ent, const void* geo, bool asPoints, bool wireframe);
   void updateClipPlanes();          // 把 frameCamera 里的 near/far 计算抽出来
   void doPan(const QPoint& delta);  // 按比例平移
 
@@ -158,31 +149,26 @@ class Scene3DRenderer : public QWidget {
   float HeightAtWorld(const QVector3D& w) const;
 
   // 屏幕点 → 地形交点：先沿射线步进寻找高度符号变化，再用二分细化交点。
-  bool PickTerrain(const QPoint& localPos, QVector3D& out, float& outU,
-                   float& outV) const;
+  bool PickTerrain(const QPoint& localPos, QVector3D& out, float& outU, float& outV) const;
   // 将裁剪空间坐标逆变换到世界空间。
-  static QVector3D Unproject(const QMatrix4x4& invVP, float nx, float ny,
-                             float nz);
+  static QVector3D Unproject(const QMatrix4x4& invVP, float nx, float ny, float nz);
 
-  QVector3D LatLonToWorldAt(double lat, double lon, double refLat,
-                            double refLon) const;
+  QVector3D LatLonToWorldAt(double lat, double lon, double refLat, double refLon) const;
   void WorldToLatLon(const QVector3D& world, double& lat, double& lon) const;
 
  private:
   // Qt 3D 窗口及其 QWidget 容器。
-  Qt3DExtras::Qt3DWindow* view_ = nullptr;  // 负责实际渲染的 Qt 3D 窗口
-  QWidget* container_ = nullptr;  // 将 Qt 3D 窗口嵌入当前 QWidget 的容器
-  Qt3DCore::QEntity* rootEntity_ = nullptr;  // 场景实体树的根节点
-  Qt3DRender::QCamera* camera_ = nullptr;    // 当前场景使用的相机
-  Qt3DExtras::QOrbitCameraController* camController_ =
-      nullptr;  // 默认轨道相机控制器
+  Qt3DExtras::Qt3DWindow* view_ = nullptr;                       // 负责实际渲染的 Qt 3D 窗口
+  QWidget* container_ = nullptr;                                 // 将 Qt 3D 窗口嵌入当前 QWidget 的容器
+  Qt3DCore::QEntity* rootEntity_ = nullptr;                      // 场景实体树的根节点
+  Qt3DRender::QCamera* camera_ = nullptr;                        // 当前场景使用的相机
+  Qt3DExtras::QOrbitCameraController* camController_ = nullptr;  // 默认轨道相机控制器
 
   // 当前地形生成的实体；重建时会销毁并重新创建。
-  Qt3DCore::QEntity* pointCloudEntity_ = nullptr;  // 点云显示实体
-  Qt3DCore::QEntity* meshEntity_ = nullptr;        // 三角网格显示实体
-  QVector<Qt3DRender::QPointSize*>
-      pointSizeNodes_;      // 点云材质中的点大小状态节点
-  float pointSize_ = 4.0f;  // 点云点尺寸（像素）
+  Qt3DCore::QEntity* pointCloudEntity_ = nullptr;    // 点云显示实体
+  Qt3DCore::QEntity* meshEntity_ = nullptr;          // 三角网格显示实体
+  QVector<Qt3DRender::QPointSize*> pointSizeNodes_;  // 点云材质中的点大小状态节点
+  float pointSize_ = 4.0f;                           // 点云点尺寸（像素）
 
   // 真实高程（米），按行优先排列，索引为 row * gridCols_ + col。
   std::vector<float> grid_;                   // 当前地形高程采样数据
@@ -213,25 +199,21 @@ class Scene3DRenderer : public QWidget {
   QPoint lastMousePos_;     // 最近一次鼠标位置，用于计算平移增量
   float panFactor_ = 1.2f;  // 平移速度相对于相机距离的系数
 
-  QVector3D lightDir_ =
-      QVector3D(0.45f, 0.78f, 0.44f).normalized();  // 单位方向光向量
-  float ambient_ = 0.35f;                           // 环境光强度，范围为 0 到 1
-  float azimuth_ = 315.0f;                          // 光源方位角（度）
-  float elevation_ = 45.0f;                         // 光源高度角（度）
-  float brightness_ = 1.0f;  // 颜色亮度系数，1 表示原始亮度
-  float contrast_ = 1.0f;    // 颜色对比度系数，1 表示原始对比度
+  QVector3D lightDir_ = QVector3D(0.45f, 0.78f, 0.44f).normalized();  // 单位方向光向量
+  float ambient_ = 0.35f;                                             // 环境光强度，范围为 0 到 1
+  float azimuth_ = 315.0f;                                            // 光源方位角（度）
+  float elevation_ = 45.0f;                                           // 光源高度角（度）
+  float brightness_ = 1.0f;                                           // 颜色亮度系数，1 表示原始亮度
+  float contrast_ = 1.0f;                                             // 颜色对比度系数，1 表示原始对比度
 
   MemoryTextureImage* terrainTexImage_ = nullptr;  // Qt 3D 使用的纹理图像对象
 
   // 路径相关
-  bool adding_path_ = false;      // 是否处于路径采集模式
-  QPoint press_pos_;              // 鼠标按下位置，用于区分点击和拖动
-  bool potential_click_ = false;  // 当前鼠标按压是否仍可能判定为点击
-  QObject* mouse_owner_ =
-      nullptr;  // 当前接收鼠标事件的对象，防止容器和窗口重复投递
-  const int click_threshold_ = 6;  // 超过该像素距离视为拖拽
-
-  Path3DManager* path_manager_ = nullptr;
+  bool adding_path_ = false;        // 是否处于路径采集模式
+  QPoint press_pos_;                // 鼠标按下位置，用于区分点击和拖动
+  bool potential_click_ = false;    // 当前鼠标按压是否仍可能判定为点击
+  QObject* mouse_owner_ = nullptr;  // 当前接收鼠标事件的对象，防止容器和窗口重复投递
+  const int click_threshold_ = 6;   // 超过该像素距离视为拖拽
 
   // 每次新建3d模型 对应的经纬度范围，方便路径点转换到世界坐标。
   double tile_lon_min_ = 0.0;

@@ -1,0 +1,7 @@
+BasedOnStyle: Google                     # Google代码风格
+Language: Cpp                            # 语言C++
+ColumnLimit: 120                         # 列宽限制
+LineEnding: LF                           # 行尾格式
+SortIncludes: Never                      # 控制 clang-format 是否以及如何排序 #includes
+PointerAlignment: Left                   # 指针对齐方式
+ReferenceAlignment: Left                 # 引用对齐方式

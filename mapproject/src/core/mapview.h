@@ -16,6 +16,9 @@
 #include <QSet>
 #include <QTimer>
 #include <QVector>
+#include <QPainterPath>
+
+#include "PathDataModel.h"
 
 // 在线地图数据源。
 enum MapSources {
@@ -55,14 +58,20 @@ class MapView : public QGraphicsView {
   void SwitchTileServer(MapSources sources, ImageType type, bool show_cva);
   // 将 scene 坐标转换为 WGS84 经纬度。
   // 输出参数 outLat/outLon 分别接收纬度和经度；坐标无效时返回 false。
-  bool SceneToLatLon(const QPointF& scenePt, double& outLat,
-                     double& outLon) const;
+  bool SceneToLatLon(const QPointF& scenePt, double& outLat, double& outLon) const;
+
   // 只影响"正在画 + 之后新建"的路径
   // width 为绘制线宽（像素），color 为路径颜色。
   void SetPathStyle(int width, const QColor& color);
   // 额外把已保存的所有路径一起改样式
   // 将同一线宽和颜色应用到当前路径及所有已保存路径。
   void SetAllPathsStyle(int width, const QColor& color);
+  // 获取当前路径的场景坐标点列表（按绘制顺序）。
+  PathData GetCurrentPathPoints() const { return current_path_data_; }
+  // 更新路径的场景（按绘制顺序），并刷新线条。
+  void PaintPath(PathData path);
+  // 重建路径
+  void RefreshPath(QVector<PathData>);
 
  public slots:
   // 开启或关闭地图上的路径点采集模式。
@@ -75,8 +84,9 @@ class MapView : public QGraphicsView {
   void SlotRemoveSavedPathById(quint64 id);
 
  signals:
-  // 路径保存完成通知；lengthMeters 为按地图投影估算的路径长度（米）。
-  void SignalPathSaved(quint64 id, const QString& name, double lengthMeters);
+  void SignalPathAddPoint();
+  // 路径保存完成通知。
+  void SignalPathSaved(PathData data);
   // 已保存路径被删除时发出其唯一 ID。
   void SignalPathRemoved(quint64 id);
 
@@ -98,7 +108,7 @@ class MapView : public QGraphicsView {
 
  private:
   // 将 WGS84 经纬度转换为指定缩放级别的 Web Mercator 瓦片坐标。
-  static QPoint LatLonToTile(double lat, double lon, int zoom);
+  static QPointF LatLonToScene(double lat, double lon, int zoom);
 
   // 请求属性键：保存发起请求时的视口代数，用于过滤过期响应。
   static QNetworkRequest::Attribute EpochAttr() {
@@ -119,11 +129,17 @@ class MapView : public QGraphicsView {
   void ScalePaths(double factor);
   void RefreshPathPen();  // 依据 pen_width_ / pen_color_ 重建 path_pen_
   // 根据相邻场景坐标转换得到的经纬度计算整条路径长度（米）。
-  double ComputePathLengthMeters(const QVector<QPointF>& pts) const;
+  double ComputePathLengthMeters(const PathData& pts) const;
 
   QGraphicsScene* scene_;       // 地图瓦片和路径图元所在场景，由本控件持有
   QNetworkAccessManager* nam_;  // 异步请求瓦片的网络管理器，由本控件持有
   QTimer scroll_timer_;         // 滚动/缩放后的延迟加载定时器
+
+  // 图层配置和已加载瓦片集合；集合用于避免重复下载同一瓦片。
+  QVector<TileLayer> layers_;              // 当前启用的瓦片图层配置
+  QHash<int, QSet<QPoint>> loaded_tiles_;  // 按图层 ID 保存已请求/加载的瓦片坐标
+  // 网络请求属性键：记录每个请求所属的 TileLayerId。
+  QNetworkRequest::Attribute layer_attr_ = QNetworkRequest::Attribute(QNetworkRequest::UserMax + 1);
 
   int zoom_;               // 当前 Web Mercator 缩放级别
   bool mouse_dragging_;    // 是否正在通过鼠标拖动平移地图
@@ -135,39 +151,15 @@ class MapView : public QGraphicsView {
   QPoint press_pos_;               // 鼠标按下位置（控件像素坐标）
   const int click_threshold_ = 6;  // 超过该像素距离后判定为拖拽
 
-  // 图层配置和已加载瓦片集合；集合用于避免重复下载同一瓦片。
-  QVector<TileLayer> layers_;  // 当前启用的瓦片图层配置
-  QHash<int, QSet<QPoint>>
-      loaded_tiles_;  // 按图层 ID 保存已请求/加载的瓦片坐标
-  // 网络请求属性键：记录每个请求所属的 TileLayerId。
-  QNetworkRequest::Attribute layer_attr_ =
-      QNetworkRequest::Attribute(QNetworkRequest::UserMax + 1);
-
   // 路径绘制相关成员
-  bool adding_path_ = false;  // 是否处于路径采集模式
-  QVector<QPointF>
-      current_path_points_;  // 当前路径的场景坐标点，按绘制顺序排列
-  QVector<QGraphicsEllipseItem*>
-      current_path_markers_;  // 当前路径各点对应的圆形标记
+  bool adding_path_ = false;                        // 是否处于路径采集模式
+  PathData current_path_data_;                      // 当前路径数据（场景坐标点列表 + 样式）
   QGraphicsPathItem* current_path_item_ = nullptr;  // 当前路径的折线图元
+  QPen path_pen_;                                   // 当前路径线条画笔
 
-  // 已保存路径（按 id 管理）
-  QVector<QGraphicsPathItem*> saved_path_items_;  // 每条已保存路径的折线图元
-  QVector<QVector<QGraphicsEllipseItem*>>
-      saved_path_markers_;           // 各路径的顶点标记
-  QVector<quint64> saved_path_ids_;  // 与其他已保存路径数组按索引对应的唯一 ID
-  QVector<QString> saved_path_names_;     // 各路径的显示名称
-
-  QPen path_pen_;                     // 当前路径线条画笔
-  QBrush marker_brush_;               // 路径点标记的填充画刷
-  double marker_pixel_radius_ = 4.0;  // 路径标记在屏幕上的半径（像素）
-
-  // id 生成
-  quint64 next_path_id_ = 1;  // 下一个分配给新路径的唯一 ID
-
-  // ==== 路径线宽 / 颜色（供 SetPathStyle / SetAllPathsStyle 使用）====
-  int pen_width_ = 2;           // 当前路径线宽（像素）
-  QColor pen_color_ = Qt::red;  // 当前路径颜色
+  // 已保存路径渲染（按 id 管理）
+  QMap<quint64, QGraphicsPathItem*> saved_path_items_map_;  // 已保存路径的折线图元，按唯一 ID 索引
+  quint64 next_path_id_ = 1;                                // 下一个分配给新路径的唯一 ID
 };
 
 #endif  // MAPVIEW_H

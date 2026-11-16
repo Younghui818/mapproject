@@ -46,8 +46,8 @@ class MapMainWidget : public QWidget {
   void SignalsLink();
 
   // 两个视图共享路径样式和路径业务状态，但同一时刻只显示一个地图视图。
-  Map3DWidget* w3d_widget_ = nullptr;  // 3D 地形视图控件，作为主窗口子对象
-  MapView* map_view_ = nullptr;        // 2D 瓦片地图视图控件，作为主窗口子对象
+  Map3DWidget* w3d_widget_ = nullptr;  // 3D 地形视图控件
+  MapView* map_view_ = nullptr;        // 2D 瓦片地图视图控件
 
   QWidget* widget_map_show_ = nullptr;    // 地图源、底图样式和注记设置容器
   QRadioButton* btn_rd_ = nullptr;        // 标准道路底图选项
@@ -56,11 +56,12 @@ class MapMainWidget : public QWidget {
   QRadioButton* btn_tianditu_ = nullptr;  // 天地图源选项
   QCheckBox* cbx_show_cva_ = nullptr;     // 是否显示2D地图注记层
 
-  QPushButton* btn_enter_3d_ = nullptr;  // 启动 3D 构建并切换到 3D 视图的按钮
-  Map3DOperationWidget* w3d_operation_widget_ =
-      nullptr;  // 3D 地形操作控件，作为主窗口子对象
+  // 3d模式相关控件
+  QPushButton* btn_enter_3d_ = nullptr;                   // 启动 3D 构建并切换到 3D 视图的按钮
+  Map3DOperationWidget* w3d_operation_widget_ = nullptr;  // 3D 地形操作控件
 
-  MapPathWidget* path_widget_ = nullptr;  // 路径操作控件，作为主窗口子对象
+  // 路径相关控件
+  MapPathWidget* path_widget_ = nullptr;  // 路径操作控件
 };
 
 #endif  // MAP_MAIN_WIDGET_H_

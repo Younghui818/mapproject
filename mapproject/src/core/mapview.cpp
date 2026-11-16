@@ -10,14 +10,14 @@
 #include <QTransform>
 #include <cmath>
 
+const QString kTianDiTuKey = "4e17baf1ebcefc505f3121c67950cd71";
+
 MapView::MapView(QWidget* parent)
     : QGraphicsView(parent),
       scene_(new QGraphicsScene(this)),
       nam_(new QNetworkAccessManager(this)),
       zoom_(12),
-      mouse_dragging_(false),
-      path_pen_(QPen(Qt::red, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)),
-      marker_brush_(QBrush(Qt::red)) {
+      mouse_dragging_(false) {
   setRenderHint(QPainter::SmoothPixmapTransform);
   setBackgroundBrush(QBrush(QColor(191, 191, 191)));
   setScene(scene_);
@@ -25,26 +25,20 @@ MapView::MapView(QWidget* parent)
   setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
   QNetworkProxyFactory::setUseSystemConfiguration(true);
-  connect(nam_, &QNetworkAccessManager::finished, this,
-          &MapView::SlotOnTileLoaded);
+  connect(nam_, &QNetworkAccessManager::finished, this, &MapView::SlotOnTileLoaded);
 
   scroll_timer_.setSingleShot(true);
-  connect(&scroll_timer_, &QTimer::timeout, this,
-          &MapView::SlotLoadVisibleTiles);
-  connect(horizontalScrollBar(), &QScrollBar::valueChanged, this,
-          [this] { scroll_timer_.start(150); });
-  connect(verticalScrollBar(), &QScrollBar::valueChanged, this,
-          [this] { scroll_timer_.start(150); });
+  connect(&scroll_timer_, &QTimer::timeout, this, &MapView::SlotLoadVisibleTiles);
+  connect(horizontalScrollBar(), &QScrollBar::valueChanged, this, [this] { scroll_timer_.start(150); });
+  connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { scroll_timer_.start(150); });
 
   // 初始视图定位到默认经纬度，再加载当前可见区域的瓦片。
-  QPoint hz = LatLonToTile(30.2741, 120.1551, zoom_);
-  QPointF centerScene((hz.x() + 0.5) * 256.0, (hz.y() + 0.5) * 256.0);
+  QPointF hz = LatLonToScene(30.2741, 120.1551, zoom_);
 
   SetSceneRectForZoom(zoom_);
-  centerOn(centerScene);
+  centerOn(hz);
   SlotLoadVisibleTiles();
-  qDebug() << "[Init map view center] center:x" << centerScene.x()
-           << " y:" << centerScene.y();
+  qDebug() << "[Init map view center] center:x" << hz.x() << " y:" << hz.y();
 }
 
 void MapView::wheelEvent(QWheelEvent* event) {
@@ -100,8 +94,7 @@ void MapView::mouseMoveEvent(QMouseEvent* event) {
   if (adding_path_ && potential_click_) {
     // 判断是否超过阈值，若超过则认为是拖拽
     QPoint delta = event->pos() - press_pos_;
-    if (std::abs(delta.x()) > click_threshold_ ||
-        std::abs(delta.y()) > click_threshold_) {
+    if (std::abs(delta.x()) > click_threshold_ || std::abs(delta.y()) > click_threshold_) {
       potential_click_ = false;
       // 启用拖拽行为（以便用户拖动地图）
       mouse_dragging_ = true;
@@ -214,8 +207,7 @@ void MapView::SlotLoadVisibleTiles() {
         }
 
         QNetworkRequest req(url);
-        req.setHeader(QNetworkRequest::UserAgentHeader,
-                      "Mozilla/5.0 MapStudio/1.0");
+        req.setHeader(QNetworkRequest::UserAgentHeader, "Mozilla/5.0 MapStudio/1.0");
         if (url.contains("tianditu")) {
           req.setRawHeader("Referer", "https://www.tianditu.gov.cn/");
         } else if (url.contains("autonavi") || url.contains("amap")) {
@@ -233,15 +225,15 @@ void MapView::SlotLoadVisibleTiles() {
   }
 }
 
-QPoint MapView::LatLonToTile(double lat, double lon, int zoom) {
-  constexpr double PI = 3.14159265358979323846;
+QPointF MapView::LatLonToScene(double lat, double lon, int zoom) {
+  constexpr double PI = M_PI;
   double latRad = lat * PI / 180.0;
   int n = 1 << zoom;
-  int x = static_cast<int>((lon + 180.0) / 360.0 * n);
-  int y = static_cast<int>(
-      (1.0 - std::log(std::tan(latRad) + 1.0 / std::cos(latRad)) / PI) / 2.0 *
-      n);
-  return QPoint(x, y);
+
+  double x = (lon + 180.0) / 360.0 * n;
+  double y = (1.0 - std::log(std::tan(latRad) + 1.0 / std::cos(latRad)) / PI) / 2.0 * n;
+
+  return QPointF(x * 256.0, y * 256.0);
 }
 
 void MapView::SetSceneRectForZoom(int zoom) {
@@ -249,39 +241,34 @@ void MapView::SetSceneRectForZoom(int zoom) {
   scene_->setSceneRect(0, 0, world, world);
 }
 
-void MapView::SwitchTileServer(MapSources sources, ImageType type,
-                               bool show_cva) {
+void MapView::SwitchTileServer(MapSources sources, ImageType type, bool show_cva) {
   layers_.clear();
   switch (sources) {
     case kMapSourcesAMap:
       if (type == kImageTypeSt) {
         // 卫星层
-        layers_.append(
-            {LayerSat,
-             "https://webst0%1.is.autonavi.com/"
-             "appmaptile?lang=zh_cn&size=1&scale=1&style=6&x=%2&y=%3&z=%4",
-             1.0, 0, true});
+        layers_.append({LayerSat,
+                        "https://webst0%1.is.autonavi.com/"
+                        "appmaptile?lang=zh_cn&size=1&scale=1&style=6&x=%2&y=%3&z=%4",
+                        1.0, 0, true});
         if (show_cva) {
-          layers_.append(
-              {LayerAnno,
-               "https://webst0%1.is.autonavi.com/"
-               "appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=%2&y=%3&z=%4",
-               1.0, 1, true});
+          layers_.append({LayerAnno,
+                          "https://webst0%1.is.autonavi.com/"
+                          "appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=%2&y=%3&z=%4",
+                          1.0, 1, true});
         }
       } else {
         // 路线底图
         if (show_cva) {
-          layers_.append(
-              {LayerSat,
-               "https://webrd0%1.is.autonavi.com/"
-               "appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=%2&y=%3&z=%4",
-               1.0, 0, true});
+          layers_.append({LayerSat,
+                          "https://webrd0%1.is.autonavi.com/"
+                          "appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=%2&y=%3&z=%4",
+                          1.0, 0, true});
         } else {
-          layers_.append(
-              {LayerSat,
-               "https://wprd0%1.is.autonavi.com/"
-               "appmaptile?lang=zh_cn&size=1&scale=1&style=7&x=%2&y=%3&z=%4",
-               1.0, 0, true});
+          layers_.append({LayerSat,
+                          "https://wprd0%1.is.autonavi.com/"
+                          "appmaptile?lang=zh_cn&size=1&scale=1&style=7&x=%2&y=%3&z=%4",
+                          1.0, 0, true});
         }
       }
       break;
@@ -292,8 +279,8 @@ void MapView::SwitchTileServer(MapSources sources, ImageType type,
                         "https://t%1.tianditu.gov.cn/img_w/wmts?"
                         "SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=img&"
                         "STYLE=default&FORMAT=tiles&TILEMATRIXSET=w&"
-                        "TILEMATRIX=%4&TILEROW=%3&TILECOL=%2&tk="
-                        "4e17baf1ebcefc505f3121c67950cd71",
+                        "TILEMATRIX=%4&TILEROW=%3&TILECOL=%2&tk=" +
+                            kTianDiTuKey,
                         1.0, 0, true});
       } else {
         // 路线底图
@@ -301,19 +288,19 @@ void MapView::SwitchTileServer(MapSources sources, ImageType type,
                         "https://t%1.tianditu.gov.cn/vec_w/wmts?"
                         "SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=vec&"
                         "STYLE=default&FORMAT=tiles&TILEMATRIXSET=w&"
-                        "TILEMATRIX=%4&TILEROW=%3&TILECOL=%2&tk="
-                        "4e17baf1ebcefc505f3121c67950cd71",
+                        "TILEMATRIX=%4&TILEROW=%3&TILECOL=%2&tk=" +
+                            kTianDiTuKey,
                         1.0, 0, true});
       }
       if (show_cva) {
-        layers_.append(
-            {LayerAnno,
-             "https://t%1.tianditu.gov.cn/cva_w/"
-             "wmts?service=WMTS&request=GetTile&version=1.0.0&layer="
-             "cva&style=default&format=image/"
-             "png&tilematrixset=w&tilematrix=%4&tilerow=%3&tilecol=%2&"
-             "tk=4e17baf1ebcefc505f3121c67950cd71",
-             1.0, 1, true});
+        layers_.append({LayerAnno,
+                        "https://t%1.tianditu.gov.cn/cva_w/"
+                        "wmts?service=WMTS&request=GetTile&version=1.0.0&layer="
+                        "cva&style=default&format=image/"
+                        "png&tilematrixset=w&tilematrix=%4&tilerow=%3&tilecol=%2&"
+                        "tk=" +
+                            kTianDiTuKey,
+                        1.0, 1, true});
       }
 
       break;
@@ -329,37 +316,40 @@ void MapView::SwitchTileServer(MapSources sources, ImageType type,
 }
 
 void MapView::AddPointToCurrentPath(const QPointF& pt) {
-  current_path_points_.append(pt);
+  current_path_data_.id = next_path_id_;
+  double lat = 0.0, lon = 0.0;
+  if (!SceneToLatLon(pt, lat, lon)) {
+    return;
+  }
+  PathRecord record;
+  record.lat = lat;
+  record.lon = lon;
+  current_path_data_.points.append(record);
+  emit SignalPathAddPoint();  // 通知 UI 更新当前路径点数显示
+}
 
-  QPainterPath path;
-  if (!current_path_points_.isEmpty()) {
-    path.moveTo(current_path_points_.first());
-    for (int i = 1; i < current_path_points_.size(); ++i) {
-      path.lineTo(current_path_points_.at(i));
+void MapView::ScalePaths(double factor) {
+  if (qFuzzyCompare(factor, 1.0)) return;
+
+  // 缩放已保存路径与移动保存标记的位置（标记忽略变换，仅更新 pos）
+  for (auto it = saved_path_items_map_.begin(); it != saved_path_items_map_.end(); ++it) {
+    quint64 id = it.key();
+    QGraphicsPathItem* item = it.value();
+    if (item) {
+      QPainterPath p = item->path();
+      QTransform t;
+      t.scale(factor, factor);
+      item->setPath(t.map(p));
     }
   }
 
-  if (!current_path_item_) {
-    current_path_item_ = new QGraphicsPathItem(path);
-    current_path_item_->setPen(path_pen_);
-    current_path_item_->setZValue(2);
-    scene_->addItem(current_path_item_);
-  } else {
-    current_path_item_->setPath(path);
+  // 当前路径
+  if (current_path_item_) {
+    QPainterPath p = current_path_item_->path();
+    QTransform t;
+    t.scale(factor, factor);
+    current_path_item_->setPath(t.map(p));
   }
-
-  // 标记：创建忽略变换的 marker，使其在屏幕上保持恒定像素大小
-  auto* marker = new QGraphicsEllipseItem(
-      -marker_pixel_radius_, -marker_pixel_radius_, marker_pixel_radius_ * 2,
-      marker_pixel_radius_ * 2);
-  marker->setBrush(marker_brush_);
-  marker->setPen(Qt::NoPen);
-  marker->setZValue(3);
-  marker->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
-  // 将 marker 的位置设为路径点位置（pos 是 scene 坐标）
-  marker->setPos(pt);
-  scene_->addItem(marker);
-  current_path_markers_.append(marker);
 }
 
 void MapView::ClearTileItems() {
@@ -373,86 +363,31 @@ void MapView::ClearTileItems() {
   }
 }
 
-void MapView::ScalePaths(double factor) {
-  if (qFuzzyCompare(factor, 1.0)) return;
-
-  // 缩放已保存路径与移动保存标记的位置（标记忽略变换，仅更新 pos）
-  for (auto* pItem : saved_path_items_) {
-    if (!pItem) continue;
-    QPainterPath p = pItem->path();
-    QTransform t;
-    t.scale(factor, factor);
-    pItem->setPath(t.map(p));
-  }
-  for (int pi = 0; pi < saved_path_markers_.size(); ++pi) {
-    auto& markers = saved_path_markers_[pi];
-    for (auto* m : markers) {
-      if (!m) continue;
-      QPointF p = m->pos();
-      m->setPos(p * factor);
-    }
-  }
-
-  // 当前路径
-  if (current_path_item_) {
-    QPainterPath p = current_path_item_->path();
-    QTransform t;
-    t.scale(factor, factor);
-    current_path_item_->setPath(t.map(p));
-  }
-  for (auto* m : current_path_markers_) {
-    if (!m) continue;
-    QPointF p = m->pos();
-    m->setPos(p * factor);
-  }
-
-  // 更新存储点（scene 坐标）
-  for (int i = 0; i < current_path_points_.size(); ++i)
-    current_path_points_[i] *= factor;
-}
-
 quint64 MapView::SlotSaveCurrentPath(const QString& name) {
-  if (!current_path_item_ || current_path_points_.isEmpty()) return 0;
+  if (!current_path_item_) return 0;
 
   quint64 id = next_path_id_++;
-  const double len = ComputePathLengthMeters(current_path_points_);
-
-  saved_path_items_.append(current_path_item_);
-  saved_path_markers_.append(current_path_markers_);
-  saved_path_ids_.append(id);
-  saved_path_names_.append(name.isEmpty() ? QString("Path %1").arg(id) : name);
-
+  saved_path_items_map_.insert(id, current_path_item_);
+  emit SignalPathSaved(current_path_data_);
   // 清空 current
   current_path_item_ = nullptr;
-  current_path_markers_.clear();
-  current_path_points_.clear();
-
-  emit SignalPathSaved(id, saved_path_names_.last(), len);
+  current_path_data_.points.clear();
   return id;
 }
 
 void MapView::SlotRemoveSavedPathById(quint64 id) {
-  int idx = saved_path_ids_.indexOf(id);
-  if (idx < 0) return;
   // remove path item
-  auto* p = saved_path_items_.at(idx);
-  if (p) {
-    scene_->removeItem(p);
-    delete p;
-  }
-  // remove markers
-  for (auto* m : saved_path_markers_.at(idx)) {
-    if (m) {
-      scene_->removeItem(m);
-      delete m;
+  for (auto it = saved_path_items_map_.begin(); it != saved_path_items_map_.end(); ++it) {
+    if (it.key() != id) {
+      continue;
+    }
+    QGraphicsPathItem* item = it.value();
+    if (item) {
+      scene_->removeItem(item);
+      delete item;
     }
   }
-
-  saved_path_items_.removeAt(idx);
-  saved_path_markers_.removeAt(idx);
-  saved_path_names_.removeAt(idx);
-  saved_path_ids_.removeAt(idx);
-
+  saved_path_items_map_.remove(id);
   emit SignalPathRemoved(id);
 }
 
@@ -466,14 +401,7 @@ void MapView::SlotSetAddingPath(bool enable) {
       delete current_path_item_;
       current_path_item_ = nullptr;
     }
-    for (auto* m : current_path_markers_) {
-      if (m) {
-        scene_->removeItem(m);
-        delete m;
-      }
-    }
-    current_path_markers_.clear();
-    current_path_points_.clear();
+    current_path_data_.points.clear();
   } else {
     // 不自动保存，留给 SaveCurrentPath 由 UI 决定保存（也可直接保存）
   }
@@ -481,25 +409,15 @@ void MapView::SlotSetAddingPath(bool enable) {
 
 void MapView::SlotClearAllPaths() {
   // 已保存路径
-  for (auto* it : saved_path_items_) {
-    if (it) {
-      scene_->removeItem(it);
-      delete it;
+  for (auto it = saved_path_items_map_.begin(); it != saved_path_items_map_.end(); ++it) {
+    quint64 id = it.key();
+    QGraphicsPathItem* item = it.value();
+    if (item) {
+      scene_->removeItem(item);
+      delete item;
     }
   }
-  saved_path_items_.clear();
-
-  for (auto& markers : saved_path_markers_) {
-    for (auto* m : markers) {
-      if (m) {
-        scene_->removeItem(m);
-        delete m;
-      }
-    }
-  }
-  saved_path_markers_.clear();
-  saved_path_names_.clear();
-  saved_path_ids_.clear();
+  saved_path_items_map_.clear();
 
   // 当前路径
   if (current_path_item_) {
@@ -507,19 +425,11 @@ void MapView::SlotClearAllPaths() {
     delete current_path_item_;
     current_path_item_ = nullptr;
   }
-  for (auto* m : current_path_markers_) {
-    if (m) {
-      scene_->removeItem(m);
-      delete m;
-    }
-  }
-  current_path_markers_.clear();
-  current_path_points_.clear();
+  current_path_data_.points.clear();
 }
 
 // 在文件适当位置添加 SceneToLatLon 实现
-bool MapView::SceneToLatLon(const QPointF& scenePt, double& outLat,
-                            double& outLon) const {
+bool MapView::SceneToLatLon(const QPointF& scenePt, double& outLat, double& outLon) const {
   // 计算 tile x/y（浮点）
   double tx = scenePt.x() / 256.0;
   double ty = scenePt.y() / 256.0;
@@ -538,63 +448,101 @@ bool MapView::SceneToLatLon(const QPointF& scenePt, double& outLat,
 }
 
 void MapView::RefreshPathPen() {
-  path_pen_.setColor(pen_color_);
-  path_pen_.setWidth(pen_width_);
+  path_pen_.setColor(current_path_data_.color);
+  path_pen_.setWidth(current_path_data_.width);
   // 视图未做缩放变换（缩放走的是 ScalePaths 改几何），cosmetic 与否等价；
   // 加上可保证将来若使用 view->scale()，线宽仍按屏幕像素显示
   path_pen_.setCosmetic(true);
-  marker_brush_.setColor(pen_color_);
 }
 
 void MapView::SetPathStyle(int width, const QColor& color) {
-  pen_width_ = qMax(1, width);
-  pen_color_ = color;
+  current_path_data_.width = qMax(1, width);
+  current_path_data_.color = color;
   RefreshPathPen();
 
   // 正在绘制的路径 + 它的标记
   if (current_path_item_) current_path_item_->setPen(path_pen_);
-  for (auto* m : current_path_markers_) {
-    if (m) m->setBrush(marker_brush_);
-  }
   viewport()->update();
 }
 
 void MapView::SetAllPathsStyle(int width, const QColor& color) {
   SetPathStyle(width, color);
 
-  // 已保存路径 + 它们的标记
-  for (auto* item : saved_path_items_) {
-    if (item) item->setPen(path_pen_);
-  }
-  for (auto& markers : saved_path_markers_) {
-    for (auto* m : markers) {
-      if (m) m->setBrush(marker_brush_);
+  // 已保存路径
+  for (auto it = saved_path_items_map_.begin(); it != saved_path_items_map_.end(); ++it) {
+    quint64 id = it.key();
+    QGraphicsPathItem* item = it.value();
+    if (item) {
+      item->setPen(path_pen_);
+      qDebug() << "path id:" << id << "pos:" << item->pos() << "visible:" << item->isVisible();
     }
   }
   viewport()->update();
 }
 
-double MapView::ComputePathLengthMeters(const QVector<QPointF>& pts) const {
-  if (pts.size() < 2) return 0.0;
-
-  constexpr double kR = 6378137.0;  // WGS84 长半轴
-  double total = 0.0;
-  double lat1 = 0.0, lon1 = 0.0;
-  if (!SceneToLatLon(pts.first(), lat1, lon1)) return 0.0;
-
-  for (int i = 1; i < pts.size(); ++i) {
-    double lat2 = 0.0, lon2 = 0.0;
-    if (!SceneToLatLon(pts.at(i), lat2, lon2)) continue;
-
-    const double dLat = (lat2 - lat1) * M_PI / 180.0;
-    const double dLon = (lon2 - lon1) * M_PI / 180.0;
-    const double s1 = std::sin(dLat * 0.5);
-    const double s2 = std::sin(dLon * 0.5);
-    const double a = s1 * s1 + std::cos(lat1 * M_PI / 180.0) *
-                                   std::cos(lat2 * M_PI / 180.0) * s2 * s2;
-    total += 2.0 * kR * std::asin(std::min(1.0, std::sqrt(a)));
-    lat1 = lat2;
-    lon1 = lon2;
+void MapView::PaintPath(PathData path_data) {
+  if (path_data.points.size() < 1) {
+    return;
   }
-  return total;
+
+  for (auto it = saved_path_items_map_.begin(); it != saved_path_items_map_.end(); ++it) {
+    quint64 id = it.key();
+    if (id != path_data.id) {
+      continue;
+    }
+    QGraphicsPathItem* item = it.value();
+    if (item) {
+      scene_->removeItem(item);
+      delete item;
+    }
+    saved_path_items_map_.remove(id);
+    break;
+  }
+
+  QPainterPath path;
+  if (path_data.polyline.size() == 1) {
+    const PathRecord& rec = path_data.polyline[0];
+    // 经纬度 → tile坐标 → scene坐标
+    QPointF scenePt = LatLonToScene(rec.lat, rec.lon, zoom_);
+    // 固定方向（水平向右）
+    double angle = 0.0;  // 弧度，0 = 向右
+    double halfLen = path_data.width / 2.0;
+    QPointF p1 = scenePt + QPointF(-halfLen, 0);
+    QPointF p2 = scenePt + QPointF(halfLen, 0);
+
+    path.moveTo(p1);
+    path.lineTo(p2);
+  } else {
+    for (int i = 0; i < path_data.polyline.size(); ++i) {
+      const PathRecord& rec = path_data.polyline[i];
+      // 经纬度 → tile坐标 → scene坐标
+      QPointF scenePt = LatLonToScene(rec.lat, rec.lon, zoom_);
+      if (i == 0)
+        path.moveTo(scenePt);
+      else
+        path.lineTo(scenePt);
+    }
+  }
+
+  // 创建路径项
+  auto* item = new QGraphicsPathItem(path);
+  QPen pen;
+  pen.setColor(path_data.color);
+  pen.setWidth(path_data.width);
+  pen.setCosmetic(true);  // 缩放时线宽不变
+  item->setPen(pen);
+  item->setZValue(3);  // 在瓦片之上
+
+  // 标记为用户数据（非瓦片）
+  item->setData(0, QVariant(false));
+  scene_->addItem(item);
+  saved_path_items_map_[path_data.id] = item;
+  return;
+}
+
+void MapView::RefreshPath(QVector<PathData> path_datas) {
+  // 绘制新路径
+  for (const auto& path_data : path_datas) {
+    PaintPath(path_data);
+  }
 }
