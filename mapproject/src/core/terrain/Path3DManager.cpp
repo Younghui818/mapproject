@@ -257,8 +257,8 @@ void Path3DManager::RefreshAllPathEntities() {
   }
 
   // TODO: 传入已保存路径
-  // saved_path_entities_[i] =
-  // BuildPathEntity(ResamplePathOnTerrain(PathPointsToWorld(saved_paths_[i], false), PathLift()));
+  //saved_path_entities_map_[i] =
+  //    BuildPathEntity(ResamplePathOnTerrain(PathPointsToWorld(saved_paths_[i], false), PathLift()));
 }
 
 void Path3DManager::BuildPathEntities(PathData path_data) {

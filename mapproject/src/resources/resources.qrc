@@ -1,1 +1,1 @@
-<RCC>  <qresource prefix="/">    <file>style/resources_white.qss</file>  </qresource></RCC>
+<RCC>  <qresource prefix="/">    <file>style/resources_white.qss</file>    <file>image/8k_sun.jpg</file>    <file>image/2k_mercury.jpg</file>    <file>image/2k_venus.jpg</file>    <file>image/2k_earth.jpg</file>    <file>image/2k_mars.jpg</file>    <file>image/2k_jupiter.jpg</file>    <file>image/2k_saturn.jpg</file>    <file>image/2k_saturn_rings.png</file>    <file>image/2k_uranus.jpg</file>    <file>image/2k_neptune.jpg</file>  </qresource></RCC>
